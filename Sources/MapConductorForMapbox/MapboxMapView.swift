@@ -22,6 +22,7 @@ public struct MapboxMapView: View {
     private let onCameraMoveStart: OnCameraMoveHandler?
     private let onCameraMove: OnCameraMoveHandler?
     private let onCameraMoveEnd: OnCameraMoveHandler?
+    private let sdkInitialize: (() -> Void)?
     private let content: () -> MapViewContent
 
     public init(
@@ -31,6 +32,7 @@ public struct MapboxMapView: View {
         onCameraMoveStart: OnCameraMoveHandler? = nil,
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
+        sdkInitialize: (() -> Void)? = nil,
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
@@ -39,6 +41,7 @@ public struct MapboxMapView: View {
         self.onCameraMoveStart = onCameraMoveStart
         self.onCameraMove = onCameraMove
         self.onCameraMoveEnd = onCameraMoveEnd
+        self.sdkInitialize = sdkInitialize
         self.content = content
     }
 
@@ -52,6 +55,7 @@ public struct MapboxMapView: View {
                 onCameraMoveStart: onCameraMoveStart,
                 onCameraMove: onCameraMove,
                 onCameraMoveEnd: onCameraMoveEnd,
+                sdkInitialize: sdkInitialize,
                 content: mapContent
             )
             ForEach(0..<mapContent.views.count, id: \.self) { index in
@@ -71,6 +75,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
     let onCameraMoveStart: OnCameraMoveHandler?
     let onCameraMove: OnCameraMoveHandler?
     let onCameraMoveEnd: OnCameraMoveHandler?
+    let sdkInitialize: (() -> Void)?
     let content: MapViewContent
 
     func makeCoordinator() -> Coordinator {
@@ -85,6 +90,9 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
     }
 
     func makeUIView(context: Context) -> MapView {
+        if let sdkInitialize {
+            Coordinator.runOnce(sdkInitialize)
+        }
         let initOptions = MapInitOptions(
             cameraOptions: state.cameraPosition.toMapboxCameraOptions(),
             styleURI: StyleURI(rawValue: state.mapDesignType.styleURI)
@@ -164,6 +172,14 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         private var isStyleLoaded = false
         private var didCallMapLoaded = false
         private let infoBubbleContainer = PassthroughContainerView()
+
+        private static var hasInitializedSdk = false
+
+        static func runOnce(_ initializer: () -> Void) {
+            if hasInitializedSdk { return }
+            hasInitializedSdk = true
+            initializer()
+        }
 
         init(
             state: MapboxViewState,
