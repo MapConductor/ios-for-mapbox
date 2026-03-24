@@ -39,17 +39,26 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         )
         let renderer = MapboxMarkerRenderer(mapView: mapView, markerManager: markerManager, markerLayer: layer)
         super.init(markerManager: markerManager, renderer: renderer)
-        setupTileRenderer()
+    }
+
+    private static var retinaAwareTileSize: Int {
+        256 * max(1, Int(UIScreen.main.scale))
     }
 
     private func setupTileRenderer() {
         let routeId = "mapconductor-markers-\(UUID().uuidString)"
+        let contentScale = Double(UIScreen.main.scale)
+        let baseCallback = tilingOptions.iconScaleCallback
+        let scaledCallback: ((MarkerState, Int) -> Double)? = { state, zoom in
+            (baseCallback?(state, zoom) ?? 1.0) * contentScale
+        }
+        MCLog.marker("MapboxMarkerController.setupTileRenderer tileSize=\(Self.retinaAwareTileSize) contentScale=\(contentScale) routeId=\(routeId)")
         let renderer = MarkerTileRenderer<Feature>(
             markerManager: markerManager,
-            tileSize: 256,
+            tileSize: Self.retinaAwareTileSize,
             cacheSizeBytes: tilingOptions.cacheSize,
             debugTileOverlay: tilingOptions.debugTileOverlay,
-            iconScaleCallback: tilingOptions.iconScaleCallback
+            iconScaleCallback: scaledCallback
         )
         TileServerRegistry.get().register(routeId: routeId, provider: renderer)
         tileRenderer = renderer
@@ -76,7 +85,10 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         let oldIds = Set(markerStatesById.keys)
 
         var newStatesById: [String: MarkerState] = [:]
-        var shouldSyncList = false
+        newStatesById.reserveCapacity(markers.count)
+        var changedStateIds: [String] = []
+        changedStateIds.reserveCapacity(markers.count)
+        var shouldSyncList = oldIds != newIds
 
         for marker in markers {
             let state = marker.state
@@ -84,14 +96,19 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
                 markerSubscriptions[state.id]?.cancel()
                 markerSubscriptions.removeValue(forKey: state.id)
                 shouldSyncList = true
+                changedStateIds.append(state.id)
+            } else if markerStatesById[state.id] == nil {
+                shouldSyncList = true
             }
             newStatesById[state.id] = state
-            if !markerManager.hasEntity(state.id) { shouldSyncList = true }
         }
 
         markerStatesById = newStatesById
         latestStates = markers.map { $0.state }
-        if oldIds != newIds { shouldSyncList = true }
+
+        if !shouldSyncList {
+            shouldSyncList = !markerManager.containsAllEntities(ids: newIds)
+        }
 
         if isStyleLoaded, shouldSyncList {
             Task { [weak self] in
@@ -102,7 +119,9 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
 
         for marker in markers {
             subscribeToMarker(marker.state)
-            onUpdateInfoBubble(marker.id)
+        }
+        for id in changedStateIds {
+            onUpdateInfoBubble(id)
         }
 
         let removedIds = oldIds.subtracting(newIds)
@@ -116,25 +135,60 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         markerManager.findNearest(position: position)
     }
 
-    func handleTap(at point: CGPoint) -> Bool {
+    func handleTap(at point: CGPoint) async -> Bool {
         guard let mapView else { return false }
-        var tapped = false
+        let mapboxMap: MapboxMap = mapView.mapboxMap
         let options = RenderedQueryOptions(layerIds: [renderer.markerLayer.layerId], filter: nil)
-        let sema = DispatchSemaphore(value: 0)
-        mapView.mapboxMap.queryRenderedFeatures(with: point, options: options) { [weak self] result in
-            defer { sema.signal() }
-            guard let self else { return }
-            if case .success(let features) = result,
-               let first = features.first,
-               let markerId = first.queriedFeature.feature.properties?[MarkerLayer.Prop.markerId]??.rawValue as? String,
-               let entity = self.markerManager.getEntity(markerId),
-               entity.state.clickable {
-                self.dispatchClick(state: entity.state)
-                tapped = true
+        let nativeTapped = await withCheckedContinuation { continuation in
+            mapboxMap.queryRenderedFeatures(with: point, options: options) { [weak self] result in
+                guard let self else { continuation.resume(returning: false); return }
+                if case .success(let features) = result,
+                   let first = features.first,
+                   let markerId = first.queriedFeature.feature.properties?[MarkerLayer.Prop.markerId]??.rawValue as? String,
+                   let entity = self.markerManager.getEntity(markerId),
+                   entity.state.clickable {
+                    self.dispatchClick(state: entity.state)
+                    continuation.resume(returning: true)
+                } else {
+                    continuation.resume(returning: false)
+                }
             }
         }
-        sema.wait()
-        return tapped
+        if nativeTapped { return true }
+        // Fall back to proximity search for tile-rendered markers.
+        return handleTiledMarkerTap(at: point)
+    }
+
+    /// Hit-test tiled markers at the given screen point (pts). Returns true if a clickable marker was found.
+    func handleTiledMarkerTap(at screenPoint: CGPoint) -> Bool {
+        MCLog.marker("MapboxMarkerController.handleTiledMarkerTap point=\(screenPoint) tiledCount=\(tiledMarkerIds.count)")
+        guard !tiledMarkerIds.isEmpty, let mapView else { return false }
+        let mapboxMap: MapboxMap = mapView.mapboxMap
+        let clickRadiusPt: CGFloat = 44
+        var bestState: MarkerState? = nil
+        var bestDist = CGFloat.infinity
+
+        for id in tiledMarkerIds {
+            guard let entity = markerManager.getEntity(id), entity.state.clickable else { continue }
+            let coord = CLLocationCoordinate2D(
+                latitude: entity.state.position.latitude,
+                longitude: entity.state.position.longitude
+            )
+            let markerPoint = mapboxMap.point(for: coord)
+            let dist = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
+            if dist < clickRadiusPt && dist < bestDist {
+                bestDist = dist
+                bestState = entity.state
+            }
+        }
+
+        if let state = bestState {
+            MCLog.marker("MapboxMarkerController.handleTiledMarkerTap hit id=\(state.id) dist=\(bestDist)")
+            dispatchClick(state: state)
+            return true
+        }
+        MCLog.marker("MapboxMarkerController.handleTiledMarkerTap miss")
+        return false
     }
 
     func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
@@ -151,11 +205,14 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
 
     override func add(data: [MarkerState]) async {
         guard tilingOptions.enabled else {
+            MCLog.marker("MapboxMarkerController.add tilingDisabled count=\(data.count)")
             await super.add(data: data)
             return
         }
+        if tileRenderer == nil { setupTileRenderer() }
 
         let shouldTileAll = data.count >= tilingOptions.minMarkerCount
+        MCLog.marker("MapboxMarkerController.add count=\(data.count) minMarkerCount=\(tilingOptions.minMarkerCount) shouldTileAll=\(shouldTileAll)")
         var localTiledMarkerIds = tiledMarkerIds
         let result = await MarkerIngestionEngine.ingest(
             data: data,
@@ -167,12 +224,15 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             shouldTile: { [shouldTileAll] _ in shouldTileAll }
         )
         tiledMarkerIds = localTiledMarkerIds
+        MCLog.marker("MapboxMarkerController.add ingest done tiledDataChanged=\(result.tiledDataChanged) hasTiledMarkers=\(result.hasTiledMarkers) tiledCount=\(tiledMarkerIds.count)")
 
         if result.tiledDataChanged, let tileRenderer {
             tileRenderer.invalidate()
             tileVersion += 1
             if let mapboxMap = mapView?.mapboxMap {
                 updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: result.hasTiledMarkers)
+            } else {
+                MCLog.marker("MapboxMarkerController.add skipped updateTileLayer: mapboxMap not available")
             }
         }
     }
@@ -185,6 +245,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         let layerId = tileLayerId ?? "mapconductor-tile-markers-layer-\(routeId)"
         tileSourceId = sourceId
         tileLayerId = layerId
+        MCLog.marker("MapboxMarkerController.updateTileLayer hasTiledMarkers=\(hasTiledMarkers) version=\(tileVersion) urlTemplate=\(urlTemplate)")
 
         if mapboxMap.layerExists(withId: layerId) { try? mapboxMap.removeLayer(withId: layerId) }
         if mapboxMap.sourceExists(withId: sourceId) { try? mapboxMap.removeSource(withId: sourceId) }

@@ -146,21 +146,20 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
 
     // MARK: - Helpers
 
-    func markerId(at point: CGPoint) -> String? {
+    func markerId(at point: CGPoint) async -> String? {
         guard let mapboxMap else { return nil }
-        var result: String?
-        let semaphore = DispatchSemaphore(value: 0)
         let options = RenderedQueryOptions(layerIds: [markerLayer.layerId], filter: nil)
-        mapboxMap.queryRenderedFeatures(with: point, options: options) { queryResult in
-            if case .success(let features) = queryResult,
-               let first = features.first,
-               let id = first.queriedFeature.feature.properties?[MarkerLayer.Prop.markerId]??.rawValue as? String {
-                result = id
+        return await withCheckedContinuation { continuation in
+            mapboxMap.queryRenderedFeatures(with: point, options: options) { queryResult in
+                if case .success(let features) = queryResult,
+                   let first = features.first,
+                   let id = first.queriedFeature.feature.properties?[MarkerLayer.Prop.markerId]??.rawValue as? String {
+                    continuation.resume(returning: id)
+                } else {
+                    continuation.resume(returning: nil)
+                }
             }
-            semaphore.signal()
         }
-        semaphore.wait()
-        return result
     }
 
     private func makeFeature(for state: MarkerState, bitmapIcon: BitmapIcon) -> Feature {

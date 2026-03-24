@@ -297,6 +297,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
 
         func updateContent(_ content: MapViewContent) {
             infoBubbleController?.syncInfoBubbles(content.infoBubbles)
+            markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
             updateStrategyRendering(content)
             groundImageController?.syncGroundImages(content.groundImages)
@@ -340,25 +341,27 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         @objc func handleMapTap(_ recognizer: UITapGestureRecognizer) {
             guard let mapView, recognizer.state == .ended else { return }
             let point = recognizer.location(in: mapView)
+            Task { [weak self] in
+                guard let self else { return }
+                if await self.markerController?.handleTap(at: point) == true {
+                    self.updateInfoBubbleLayouts()
+                    return
+                }
+                if await self.handleStrategyTap(at: point) {
+                    self.updateInfoBubbleLayouts()
+                    return
+                }
+                let mapboxMap: MapboxMap = mapView.mapboxMap
+                let coordinate = mapboxMap.coordinate(for: point)
+                if self.circleController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
+                if self.polylineController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
+                if self.polygonController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
+                if self.groundImageController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
 
-            if markerController?.handleTap(at: point) == true {
-                updateInfoBubbleLayouts()
-                return
+                let geoPoint = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+                self.controller?.notifyMapClick(geoPoint)
+                self.onMapClick?(geoPoint)
             }
-            if handleStrategyTap(at: point) {
-                updateInfoBubbleLayouts()
-                return
-            }
-
-            let coordinate = mapView.mapboxMap.coordinate(for: point)
-            if circleController?.handleTap(at: coordinate) == true { updateInfoBubbleLayouts(); return }
-            if polylineController?.handleTap(at: coordinate) == true { updateInfoBubbleLayouts(); return }
-            if polygonController?.handleTap(at: coordinate) == true { updateInfoBubbleLayouts(); return }
-            if groundImageController?.handleTap(at: coordinate) == true { updateInfoBubbleLayouts(); return }
-
-            let geoPoint = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
-            controller?.notifyMapClick(geoPoint)
-            onMapClick?(geoPoint)
         }
 
         @objc func handleMarkerLongPress(_ recognizer: UILongPressGestureRecognizer) {
@@ -490,8 +493,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             }
         }
 
-        private func handleStrategyTap(at point: CGPoint) -> Bool {
-            guard let markerId = strategyMarkerRenderer?.markerId(at: point),
+        private func handleStrategyTap(at point: CGPoint) async -> Bool {
+            guard let markerId = await strategyMarkerRenderer?.markerId(at: point),
                   let state = strategyMarkerController?.markerManager.getEntity(markerId)?.state,
                   state.clickable else { return false }
             strategyMarkerController?.dispatchClick(state)
