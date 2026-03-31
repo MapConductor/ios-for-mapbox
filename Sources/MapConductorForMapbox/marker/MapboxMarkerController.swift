@@ -26,6 +26,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     private var tiledMarkerIds: Set<String> = []
     private var tileSourceId: String?
     private var tileLayerId: String?
+    private var lastServerBaseUrl: String = ""
     private let defaultMarkerIconForTiling: BitmapIcon = DefaultMarkerIcon().toBitmapIcon()
 
     init(mapView: MapView?, onUpdateInfoBubble: @escaping (String) -> Void) {
@@ -115,6 +116,8 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
                 guard let self else { return }
                 await self.add(data: self.latestStates)
             }
+        } else if isStyleLoaded {
+            refreshTileLayerIfNeeded()
         }
 
         for marker in markers {
@@ -237,9 +240,19 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         }
     }
 
+    private func refreshTileLayerIfNeeded() {
+        guard !tiledMarkerIds.isEmpty, let mapView else { return }
+        let server = TileServerRegistry.get()
+        guard server.baseUrl != lastServerBaseUrl else { return }
+        MCLog.marker("MapboxMarkerController.refreshTileLayerIfNeeded serverRestarted oldUrl=\(lastServerBaseUrl) newUrl=\(server.baseUrl)")
+        let mapboxMap: MapboxMap = mapView.mapboxMap
+        updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: true)
+    }
+
     private func updateTileLayer(mapboxMap: MapboxMap, hasTiledMarkers: Bool) {
         guard let routeId = tileRouteId else { return }
         let server = TileServerRegistry.get()
+        lastServerBaseUrl = server.baseUrl
         let urlTemplate = server.urlTemplate(routeId: routeId, version: tileVersion)
         let sourceId = tileSourceId ?? "mapconductor-tile-markers-source-\(routeId)"
         let layerId = tileLayerId ?? "mapconductor-tile-markers-layer-\(routeId)"
