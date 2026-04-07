@@ -57,6 +57,7 @@ final class MapboxPolylineOverlayRenderer: AbstractPolylineOverlayRenderer<[Feat
 
     override func onPostProcess() async {
         guard let mapboxMap else { return }
+        guard !polylineManager.isDestroyed else { return }
         let features = polylineManager.allEntities().flatMap { $0.polyline ?? [] }
         polylineLayer.setFeatures(features, mapboxMap: mapboxMap)
     }

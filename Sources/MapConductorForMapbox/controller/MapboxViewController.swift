@@ -52,11 +52,15 @@ final class MapboxViewController: MapViewControllerProtocol {
         cameraAnimator?.start()
     }
 
-    func registerOverlayController(controller: any OverlayControllerProtocol) {}
-
-    func notifyCameraMoveStart(_ camera: MapCameraPosition) { cameraMoveStartListener?(camera) }
-    func notifyCameraMove(_ camera: MapCameraPosition) { cameraMoveListener?(camera) }
-    func notifyCameraMoveEnd(_ camera: MapCameraPosition) { cameraMoveEndListener?(camera) }
+    func notifyCameraMoveStart(_ camera: MapCameraPosition) {
+        cameraMoveStartListener?(camera)
+    }
+    func notifyCameraMove(_ camera: MapCameraPosition) {
+        cameraMoveListener?(camera)
+    }
+    func notifyCameraMoveEnd(_ camera: MapCameraPosition) {
+        cameraMoveEndListener?(camera)
+    }
     func notifyMapClick(_ point: GeoPoint) { mapClickListener?(point) }
 }
 

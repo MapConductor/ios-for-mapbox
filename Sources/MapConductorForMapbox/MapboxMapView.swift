@@ -296,6 +296,12 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         }
 
         func updateContent(_ content: MapViewContent) {
+            if let mapView {
+                let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
+                    visibleRegion: visibleRegion(mapView: mapView)
+                )
+                polylineController?.setCurrentCameraPosition(camera)
+            }
             infoBubbleController?.syncInfoBubbles(content.infoBubbles)
             markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
@@ -341,6 +347,10 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         @objc func handleMapTap(_ recognizer: UITapGestureRecognizer) {
             guard let mapView, recognizer.state == .ended else { return }
             let point = recognizer.location(in: mapView)
+            let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
+                visibleRegion: visibleRegion(mapView: mapView)
+            )
+            polylineController?.setCurrentCameraPosition(camera)
             Task { [weak self] in
                 guard let self else { return }
                 if await self.markerController?.handleTap(at: point) == true {

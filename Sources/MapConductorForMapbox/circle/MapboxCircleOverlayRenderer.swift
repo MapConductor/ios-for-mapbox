@@ -63,7 +63,9 @@ final class MapboxCircleOverlayRenderer: AbstractCircleOverlayRenderer<Feature> 
         )
         feature.identifier = .string("circle-\(state.id)")
 
-        let zoom = (mapboxMap?.cameraState.zoom ?? 0.0) + mapboxCameraZoomAdjustValue
+        // circleRadius should use the SDK-native zoom. Adding the app-level +1 offset
+        // here halves metersPerPixel and makes the circle render at 2x radius.
+        let zoom = mapboxMap?.cameraState.zoom ?? 0.0
         let metersPerPixel = mapboxMetersPerPixel(latitude: state.center.latitude, zoom: zoom)
         let scale = max(1.0, Double(mapView?.contentScaleFactor ?? UIScreen.main.scale))
         let radiusPoints = metersPerPixel > 0 ? (state.radiusMeters / metersPerPixel) / scale : 0.0

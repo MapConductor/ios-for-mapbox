@@ -32,7 +32,7 @@ final class MapboxGroundImageOverlayRenderer: AbstractGroundImageOverlayRenderer
 
         removeSourceAndLayerIfExists(mapboxMap: mapboxMap, sourceId: sourceId, layerId: layerId)
 
-        let tileTemplate = tileServer.urlTemplate(routeId: routeId, version: 0)
+        let tileTemplate = buildTileTemplate(routeId: routeId, tileSize: state.tileSize, cacheKey: tileCacheKey(state))
         addRasterLayer(mapboxMap: mapboxMap, sourceId: sourceId, layerId: layerId, tileTemplate: tileTemplate, tileSize: state.tileSize, opacity: state.opacity)
 
         return MapboxGroundImageHandle(
@@ -75,7 +75,11 @@ final class MapboxGroundImageOverlayRenderer: AbstractGroundImageOverlayRenderer
         provider.update(state: current.state, opacity: 1.0)
 
         let nextVersion = groundImage.version + 1
-        let tileTemplate = tileServer.urlTemplate(routeId: groundImage.routeId, version: nextVersion)
+        let tileTemplate = buildTileTemplate(
+            routeId: groundImage.routeId,
+            tileSize: current.state.tileSize,
+            cacheKey: tileCacheKey(current.state)
+        )
 
         removeSourceAndLayerIfExists(mapboxMap: mapboxMap, sourceId: groundImage.sourceId, layerId: groundImage.layerId)
         addRasterLayer(
@@ -140,6 +144,16 @@ final class MapboxGroundImageOverlayRenderer: AbstractGroundImageOverlayRenderer
         var layer = RasterLayer(id: layerId, source: sourceId)
         layer.rasterOpacity = .constant(min(max(opacity, 0.0), 1.0))
         try? mapboxMap.addLayer(layer)
+    }
+
+    private func buildTileTemplate(routeId: String, tileSize: Int, cacheKey: String) -> String {
+        tileServer.urlTemplate(routeId: routeId, tileSize: tileSize, cacheKey: cacheKey)
+    }
+
+    private func tileCacheKey(_ state: GroundImageState) -> String {
+        // Opacity is handled by the raster layer, so tiles only need to change when content changes.
+        let finger = state.fingerPrint()
+        return "\(finger.bounds)-\(finger.image)-\(finger.tileSize)-\(finger.extra)"
     }
 
     private func removeSourceAndLayerIfExists(mapboxMap: MapboxMap, sourceId: String, layerId: String) {

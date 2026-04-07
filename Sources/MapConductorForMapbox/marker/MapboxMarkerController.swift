@@ -9,6 +9,7 @@ import UIKit
 @MainActor
 final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMarkerRenderer> {
     private weak var mapView: MapView?
+    private var draggingMarkerId: String?
 
     private var markerSubscriptions: [String: AnyCancellable] = [:]
     private var markerStatesById: [String: MarkerState] = [:]
@@ -195,7 +196,42 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     }
 
     func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
-        // Drag support: not implemented yet - future work
+        guard let mapView else { return }
+        let point = recognizer.location(in: mapView)
+
+        switch recognizer.state {
+        case .began:
+            guard let state = draggableMarkerState(at: point) else { return }
+            draggingMarkerId = state.id
+            mapView.gestures.options.panEnabled = false
+            dispatchDragStart(state: state)
+            onUpdateInfoBubble(state.id)
+        case .changed:
+            guard let markerId = draggingMarkerId,
+                  let state = getMarkerState(for: markerId) else { return }
+            let coordinate = mapView.mapboxMap.coordinate(for: point)
+            state.position = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+            dispatchDrag(state: state)
+            onUpdateInfoBubble(markerId)
+        case .ended:
+            guard let markerId = draggingMarkerId,
+                  let state = getMarkerState(for: markerId) else {
+                mapView.gestures.options.panEnabled = true
+                draggingMarkerId = nil
+                return
+            }
+            let coordinate = mapView.mapboxMap.coordinate(for: point)
+            state.position = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+            dispatchDragEnd(state: state)
+            mapView.gestures.options.panEnabled = true
+            draggingMarkerId = nil
+            onUpdateInfoBubble(markerId)
+        case .cancelled, .failed:
+            mapView.gestures.options.panEnabled = true
+            draggingMarkerId = nil
+        default:
+            break
+        }
     }
 
     func getMarkerState(for id: String) -> MarkerState? {
@@ -290,6 +326,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     }
 
     func unbind() {
+        mapView?.gestures.options.panEnabled = true
         markerSubscriptions.values.forEach { $0.cancel() }
         markerSubscriptions.removeAll()
         markerStatesById.removeAll()
@@ -304,5 +341,28 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         renderer.unbind()
         mapView = nil
         destroy()
+    }
+
+    private func draggableMarkerState(at screenPoint: CGPoint) -> MarkerState? {
+        guard let mapView else { return nil }
+        let clickRadiusPt: CGFloat = 44
+        let candidates = markerManager.allEntities().map(\.state).filter(\.draggable)
+        var bestState: MarkerState?
+        var bestDistance = CGFloat.infinity
+
+        for state in candidates {
+            let coordinate = CLLocationCoordinate2D(
+                latitude: state.position.latitude,
+                longitude: state.position.longitude
+            )
+            let markerPoint = mapView.mapboxMap.point(for: coordinate)
+            let distance = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
+            if distance < clickRadiusPt && distance < bestDistance {
+                bestDistance = distance
+                bestState = state
+            }
+        }
+
+        return bestState
     }
 }
