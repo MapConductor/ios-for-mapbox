@@ -19,6 +19,7 @@ public struct MapboxMapView: View {
 
     private let onMapLoaded: OnMapLoadedHandler<MapboxViewState>?
     private let onMapClick: OnMapEventHandler?
+    private let onMapLongClick: OnMapEventHandler?
     private let onCameraMoveStart: OnCameraMoveHandler?
     private let onCameraMove: OnCameraMoveHandler?
     private let onCameraMoveEnd: OnCameraMoveHandler?
@@ -29,6 +30,7 @@ public struct MapboxMapView: View {
         state: MapboxViewState,
         onMapLoaded: OnMapLoadedHandler<MapboxViewState>? = nil,
         onMapClick: OnMapEventHandler? = nil,
+        onMapLongClick: OnMapEventHandler? = nil,
         onCameraMoveStart: OnCameraMoveHandler? = nil,
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
@@ -38,6 +40,7 @@ public struct MapboxMapView: View {
         self.state = state
         self.onMapLoaded = onMapLoaded
         self.onMapClick = onMapClick
+        self.onMapLongClick = onMapLongClick
         self.onCameraMoveStart = onCameraMoveStart
         self.onCameraMove = onCameraMove
         self.onCameraMoveEnd = onCameraMoveEnd
@@ -52,6 +55,7 @@ public struct MapboxMapView: View {
                 state: state,
                 onMapLoaded: onMapLoaded,
                 onMapClick: onMapClick,
+                onMapLongClick: onMapLongClick,
                 onCameraMoveStart: onCameraMoveStart,
                 onCameraMove: onCameraMove,
                 onCameraMoveEnd: onCameraMoveEnd,
@@ -72,6 +76,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
 
     let onMapLoaded: OnMapLoadedHandler<MapboxViewState>?
     let onMapClick: OnMapEventHandler?
+    let onMapLongClick: OnMapEventHandler?
     let onCameraMoveStart: OnCameraMoveHandler?
     let onCameraMove: OnCameraMoveHandler?
     let onCameraMoveEnd: OnCameraMoveHandler?
@@ -83,6 +88,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             state: state,
             onMapLoaded: onMapLoaded,
             onMapClick: onMapClick,
+            onMapLongClick: onMapLongClick,
             onCameraMoveStart: onCameraMoveStart,
             onCameraMove: onCameraMove,
             onCameraMoveEnd: onCameraMoveEnd
@@ -141,6 +147,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         private let state: MapboxViewState
         private let onMapLoaded: OnMapLoadedHandler<MapboxViewState>?
         private let onMapClick: OnMapEventHandler?
+        private let onMapLongClick: OnMapEventHandler?
         private let onCameraMoveStart: OnCameraMoveHandler?
         private let onCameraMove: OnCameraMoveHandler?
         private let onCameraMoveEnd: OnCameraMoveHandler?
@@ -185,6 +192,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             state: MapboxViewState,
             onMapLoaded: OnMapLoadedHandler<MapboxViewState>?,
             onMapClick: OnMapEventHandler?,
+            onMapLongClick: OnMapEventHandler?,
             onCameraMoveStart: OnCameraMoveHandler?,
             onCameraMove: OnCameraMoveHandler?,
             onCameraMoveEnd: OnCameraMoveHandler?
@@ -192,6 +200,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             self.state = state
             self.onMapLoaded = onMapLoaded
             self.onMapClick = onMapClick
+            self.onMapLongClick = onMapLongClick
             self.onCameraMoveStart = onCameraMoveStart
             self.onCameraMove = onCameraMove
             self.onCameraMoveEnd = onCameraMoveEnd
@@ -375,7 +384,14 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         }
 
         @objc func handleMarkerLongPress(_ recognizer: UILongPressGestureRecognizer) {
-            markerController?.handleLongPress(recognizer)
+            let handledByMarker = markerController?.handleLongPress(recognizer) ?? false
+            if !handledByMarker, recognizer.state == .began, let mapView {
+                let point = recognizer.location(in: mapView)
+                let coordinate = mapView.mapboxMap.coordinate(for: point)
+                let geoPoint = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+                controller?.notifyMapLongClick(geoPoint)
+                onMapLongClick?(geoPoint)
+            }
             updateInfoBubbleLayouts()
         }
 
