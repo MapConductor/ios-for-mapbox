@@ -62,6 +62,7 @@ final class MapboxViewController: MapViewControllerProtocol {
         cameraMoveEndListener?(camera)
     }
     func notifyMapClick(_ point: GeoPoint) { mapClickListener?(point) }
+    func notifyMapLongClick(_ point: GeoPoint) { mapLongClickListener?(point) }
 }
 
 // MARK: - Camera Animator
