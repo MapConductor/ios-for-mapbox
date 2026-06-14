@@ -20,7 +20,7 @@ func createMapboxPolygons(
 
     let innerRings: [Ring] = holes.compactMap { holePoints in
         guard !holePoints.isEmpty else { return nil }
-        var ring = holePoints.map { $0.normalize() }
+        var ring = ensureClockwiseRing(holePoints.map { $0.normalize() })
         if let first = ring.first, let last = ring.last,
            !(GeoPoint.from(position: first) == GeoPoint.from(position: last)) {
             ring.append(first)
