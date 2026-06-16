@@ -40,6 +40,12 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
             removeIfExists(mapboxMap: mapboxMap, sourceId: layer.sourceId, layerId: layer.layerId)
             return createLayerSync(state: current.state)
         }
+        if finger.debug != prevFinger.debug && current.state.debug {
+            NSLog("[MapConductor] RasterLayer debug mode: id=%@", current.state.id)
+        }
+        if finger.zIndex != prevFinger.zIndex {
+            try? mapboxMap.moveLayer(withId: layer.layerId, to: current.state.zIndex > 0 ? .at(current.state.zIndex) : .default)
+        }
         if finger.opacity != prevFinger.opacity {
             try? mapboxMap.updateLayer(withId: layer.layerId, type: MapboxMaps.RasterLayer.self) { l in
                 l.rasterOpacity = .constant(current.state.opacity)
@@ -96,10 +102,14 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
             return
         }
 
+        if state.debug {
+            NSLog("[MapConductor] RasterLayer debug mode: id=%@", state.id)
+        }
         var layer = MapboxMaps.RasterLayer(id: layerId, source: sourceId)
         layer.rasterOpacity = .constant(state.opacity)
         layer.visibility = .constant(state.visible ? .visible : .none)
-        try? mapboxMap.addLayer(layer)
+        let layerPosition: LayerPosition = state.zIndex > 0 ? .at(state.zIndex) : .default
+        try? mapboxMap.addLayer(layer, layerPosition: layerPosition)
     }
 
     private func removeIfExists(mapboxMap: MapboxMap, sourceId: String, layerId: String) {

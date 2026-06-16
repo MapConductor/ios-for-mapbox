@@ -34,7 +34,7 @@ final class MapboxPolylineOverlayRenderer: AbstractPolylineOverlayRenderer<[Feat
             geodesic: state.geodesic,
             strokeColor: state.strokeColor,
             strokeWidth: state.strokeWidth,
-            zIndex: (state.extra as? Int) ?? 0
+            zIndex: state.zIndex
         )
     }
 
@@ -49,7 +49,7 @@ final class MapboxPolylineOverlayRenderer: AbstractPolylineOverlayRenderer<[Feat
             geodesic: current.state.geodesic,
             strokeColor: current.state.strokeColor,
             strokeWidth: current.state.strokeWidth,
-            zIndex: (current.state.extra as? Int) ?? 0
+            zIndex: current.state.zIndex
         )
     }
 

@@ -346,6 +346,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             }
             if !didCallMapLoaded {
                 didCallMapLoaded = true
+                controller?.notifyMapInitialized()
                 onMapLoaded?(state)
             }
             updateInfoBubbleLayouts()

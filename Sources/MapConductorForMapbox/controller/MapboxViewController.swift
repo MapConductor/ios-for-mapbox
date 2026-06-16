@@ -15,6 +15,7 @@ final class MapboxViewController: MapViewControllerProtocol {
     private var cameraMoveEndListener: OnCameraMoveHandler?
     private var mapClickListener: OnMapEventHandler?
     private var mapLongClickListener: OnMapEventHandler?
+    private var mapInitializedListener: OnMapInitializedHandler?
 
     init(mapView: MapView) {
         self.mapView = mapView
@@ -28,6 +29,7 @@ final class MapboxViewController: MapViewControllerProtocol {
     func setCameraMoveEndListener(listener: OnCameraMoveHandler?) { cameraMoveEndListener = listener }
     func setMapClickListener(listener: OnMapEventHandler?) { mapClickListener = listener }
     func setMapLongClickListener(listener: OnMapEventHandler?) { mapLongClickListener = listener }
+    func setMapInitializedListener(listener: OnMapInitializedHandler?) { mapInitializedListener = listener }
 
     func moveCamera(position: MapCameraPosition) {
         guard let mapView else { return }
@@ -63,6 +65,10 @@ final class MapboxViewController: MapViewControllerProtocol {
     }
     func notifyMapClick(_ point: GeoPoint) { mapClickListener?(point) }
     func notifyMapLongClick(_ point: GeoPoint) { mapLongClickListener?(point) }
+
+    func notifyMapInitialized() {
+        mapInitializedListener?(.MapCreated)
+    }
 }
 
 // MARK: - Camera Animator
