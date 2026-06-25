@@ -105,6 +105,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         )
         let mapView = MapView(frame: .zero, mapInitOptions: initOptions)
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        mapView.gestures.options.panEnabled = state.uiSettings.scrollGesture
 
         let tapGesture = UITapGestureRecognizer(
             target: context.coordinator,
@@ -132,6 +133,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         if let newStyleURI, uiView.mapboxMap.style.uri != newStyleURI {
             uiView.mapboxMap.loadStyle(newStyleURI)
         }
+        uiView.gestures.options.panEnabled = state.uiSettings.scrollGesture
         context.coordinator.updateContent(content)
         context.coordinator.updateInfoBubbleLayouts()
     }

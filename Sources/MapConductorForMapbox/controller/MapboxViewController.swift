@@ -3,6 +3,7 @@ import Foundation
 import MapboxMaps
 import MapConductorCore
 import QuartzCore
+import UIKit
 
 final class MapboxViewController: MapViewControllerProtocol {
     let holder: AnyMapViewHolder
@@ -52,6 +53,21 @@ final class MapboxViewController: MapViewControllerProtocol {
             duration: durationSeconds
         )
         cameraAnimator?.start()
+    }
+
+    func fitBounds(bounds: GeoRectBounds, padding: Int) {
+        guard let mapView = mapView,
+              let sw = bounds.southWest,
+              let ne = bounds.northEast else { return }
+        let coordinates = [
+            CLLocationCoordinate2D(latitude: sw.latitude, longitude: sw.longitude),
+            CLLocationCoordinate2D(latitude: ne.latitude, longitude: sw.longitude),
+            CLLocationCoordinate2D(latitude: ne.latitude, longitude: ne.longitude),
+            CLLocationCoordinate2D(latitude: sw.latitude, longitude: ne.longitude),
+        ]
+        let edgeInsets = UIEdgeInsets(top: CGFloat(padding), left: CGFloat(padding), bottom: CGFloat(padding), right: CGFloat(padding))
+        let cameraOptions = mapView.mapboxMap.camera(for: coordinates, padding: edgeInsets, bearing: nil, pitch: nil)
+        mapView.mapboxMap.setCamera(to: cameraOptions)
     }
 
     func notifyCameraMoveStart(_ camera: MapCameraPosition) {
