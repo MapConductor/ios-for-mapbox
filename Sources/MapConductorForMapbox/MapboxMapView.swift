@@ -234,6 +234,18 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             )
             self.infoBubbleController = infoBubbleController
 
+            // Screen-space marker animation layer: shares the info-bubble
+            // container (inserted below the bubbles) and the map projection.
+            markerController.renderer.animationOverlay = MarkerAnimationOverlayCoordinator(
+                container: infoBubbleContainer,
+                project: { [weak mapView] point in
+                    guard let mapView else { return nil }
+                    let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
+                    let p = mapView.mapboxMap.point(for: coordinate)
+                    return (p.x.isFinite && p.y.isFinite) ? p : nil
+                }
+            )
+
             // Subscribe to style loaded
             styleLoadedObserver = mapView.mapboxMap.onStyleLoaded.observeNext { [weak self] _ in
                 self?.handleStyleLoaded(mapView: mapView)
@@ -276,6 +288,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         func unbind() {
             state.setController(nil)
             state.setMapViewHolder(nil)
+            markerController?.renderer.animationOverlay?.unbind()
+            markerController?.renderer.animationOverlay = nil
             styleLoadedObserver?.cancel()
             styleLoadedObserver = nil
             cameraChangedObserver?.cancel()

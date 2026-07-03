@@ -22,6 +22,11 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
     var animateStartListener: OnMarkerEventHandler?
     var animateEndListener: OnMarkerEventHandler?
 
+    /// When set, drop/bounce animations run on the screen-space overlay layer
+    /// (projection-independent: correct on tilted/rotated/globe views); the
+    /// native feature stays hidden (isHidden property) for the duration.
+    var animationOverlay: MarkerAnimationOverlayCoordinator?
+
     init(mapView: MapView?, markerManager: MarkerManager<Feature>, markerLayer: MarkerLayer) {
         self.mapView = mapView
         self.markerManager = markerManager
@@ -74,6 +79,41 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
         guard markerAnimationRunners[entity.state.id] == nil else { return }
         guard let animation = entity.state.getAnimation() else { return }
         guard let mapView else { return }
+
+        // Preferred path: animate the marker image on the screen-space overlay.
+        // Projection-independent, so tilt/rotation/globe views stay correct.
+        // Hide the native feature at its target for the duration; reveal it
+        // when the overlay finishes.
+        if let overlay = animationOverlay {
+            if var e = markerManager.getEntity(entity.state.id), var feature = e.marker {
+                feature.properties?[MarkerLayer.Prop.isHidden] = .number(1)
+                e.marker = feature
+                markerManager.updateEntity(e)
+                await onPostProcess()
+            }
+            animateStartListener?(entity.state)
+            let icon = (entity.state.icon ?? DefaultMarkerIcon()).toBitmapIcon()
+            overlay.start(MarkerAnimationOverlayEntry(
+                id: entity.state.id,
+                state: entity.state,
+                icon: icon,
+                animation: animation,
+                duration: animation == .Bounce ? 2.0 : 0.3,
+                onFinished: { [weak self] in
+                    if let self,
+                       var e = self.markerManager.getEntity(entity.state.id),
+                       var feature = e.marker {
+                        feature.properties?[MarkerLayer.Prop.isHidden] = .number(0)
+                        e.marker = feature
+                        self.markerManager.updateEntity(e)
+                    }
+                    entity.state.animate(nil)
+                    self?.animateEndListener?(entity.state)
+                    Task { @MainActor [weak self] in await self?.onPostProcess() }
+                }
+            ))
+            return
+        }
 
         mapView.layoutIfNeeded()
         if mapView.window == nil || mapView.bounds.isEmpty {
@@ -199,6 +239,13 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
         )))
 
         var props = feature.properties ?? [:]
+
+        // Keep the feature hidden while an animation is pending (mirrors the
+        // add path) so the marker doesn't flash at the target before the
+        // animation runs.
+        if state.getAnimation() != nil, markerAnimationRunners[state.id] == nil {
+            props[MarkerLayer.Prop.isHidden] = .number(1)
+        }
 
         if state.icon == nil {
             if lastBitmapIconByMarkerId[state.id] != nil {
