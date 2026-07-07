@@ -159,6 +159,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         private var markerController: MapboxMarkerController?
         private var polylineController: MapboxPolylineController?
         private var polygonController: MapboxPolygonController?
+        private var hullPolygonController: MapboxPolygonController?
         private var circleController: MapboxCircleController?
         private var groundImageController: MapboxGroundImageController?
         private var rasterController: MapboxRasterLayerController?
@@ -223,6 +224,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
 
             self.polylineController = MapboxPolylineController(mapView: mapView)
             self.polygonController = MapboxPolygonController(mapView: mapView)
+            self.hullPolygonController = MapboxPolygonController(mapView: mapView)
             self.circleController = MapboxCircleController(mapView: mapView)
             self.groundImageController = MapboxGroundImageController(mapView: mapView)
             self.rasterController = MapboxRasterLayerController(mapView: mapView)
@@ -303,6 +305,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             polylineController = nil
             polygonController?.unbind()
             polygonController = nil
+            hullPolygonController?.unbind()
+            hullPolygonController = nil
             circleController?.unbind()
             circleController = nil
             groundImageController?.unbind()
@@ -336,6 +340,12 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             circleController?.syncCircles(content.circles)
             polylineController?.syncPolylines(content.polylines)
             polygonController?.syncPolygons(content.polygons)
+            for handler in content.polygonSyncHandlers {
+                let hullController = hullPolygonController
+                handler.bindPolygonSync { [weak hullController] states in
+                    await hullController?.add(data: states)
+                }
+            }
             infoBubbleController?.updateAllLayouts()
         }
 
@@ -347,6 +357,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             groundImageController?.onStyleLoaded(mapboxMap)
             rasterController?.onStyleLoaded(mapboxMap)
             polygonController?.onStyleLoaded(mapboxMap)
+            hullPolygonController?.onStyleLoaded(mapboxMap)
             polylineController?.onStyleLoaded(mapboxMap)
             circleController?.onStyleLoaded(mapboxMap)
             markerController?.onStyleLoaded(mapboxMap)

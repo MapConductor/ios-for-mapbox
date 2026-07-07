@@ -1,24 +1,31 @@
 import Foundation
-import MapConductorCore
 
 final class MapboxGroundImageHandle {
-    let routeId: String
-    let version: Int64
     let sourceId: String
     let layerId: String
-    let tileProvider: GroundImageTileProvider
+    let applied: AppliedGroundImage
 
     init(
-        routeId: String,
-        version: Int64,
         sourceId: String,
         layerId: String,
-        tileProvider: GroundImageTileProvider
+        applied: AppliedGroundImage
     ) {
-        self.routeId = routeId
-        self.version = version
         self.sourceId = sourceId
         self.layerId = layerId
-        self.tileProvider = tileProvider
+        self.applied = applied
     }
+
+    func copy(applied: AppliedGroundImage? = nil) -> MapboxGroundImageHandle {
+        MapboxGroundImageHandle(
+            sourceId: sourceId,
+            layerId: layerId,
+            applied: applied ?? self.applied
+        )
+    }
+}
+
+struct AppliedGroundImage: Equatable {
+    let bounds: Int
+    let image: Int
+    let opacity: Int
 }
