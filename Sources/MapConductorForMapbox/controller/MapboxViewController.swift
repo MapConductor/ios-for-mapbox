@@ -10,6 +10,7 @@ final class MapboxViewController: MapViewControllerProtocol {
     let coroutine = CoroutineScope()
     private weak var mapView: MapView?
     private var cameraAnimator: CameraAnimator?
+    private(set) var lastLogicalTilt: Double?
 
     private var cameraMoveStartListener: OnCameraMoveHandler?
     private var cameraMoveListener: OnCameraMoveHandler?
@@ -34,6 +35,7 @@ final class MapboxViewController: MapViewControllerProtocol {
 
     func moveCamera(position: MapCameraPosition) {
         guard let mapView else { return }
+        lastLogicalTilt = position.tilt
         mapView.mapboxMap.setCamera(to: position.toMapboxCameraOptions())
     }
 
@@ -45,7 +47,8 @@ final class MapboxViewController: MapViewControllerProtocol {
             return
         }
         cameraAnimator?.stop()
-        let from = mapView.mapboxMap.cameraState.toMapCameraPosition()
+        let from = mapView.mapboxMap.cameraState.toMapCameraPosition(logicalTiltHint: lastLogicalTilt)
+        lastLogicalTilt = position.tilt
         cameraAnimator = CameraAnimator(
             mapView: mapView,
             from: from,

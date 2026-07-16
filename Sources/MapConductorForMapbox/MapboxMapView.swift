@@ -258,6 +258,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             cameraChangedObserver = mapView.mapboxMap.onCameraChanged.observe { [weak self] event in
                 guard let self else { return }
                 let camera = event.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt,
                     visibleRegion: self.visibleRegion(mapView: mapView)
                 )
                 self.state.updateCameraPosition(camera)
@@ -278,6 +279,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             cameraIdleObserver = mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
                 guard let self else { return }
                 let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt,
                     visibleRegion: self.visibleRegion(mapView: mapView)
                 )
                 isCameraMoving = false
@@ -322,6 +324,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         func updateContent(_ content: MapViewContent) {
             if let mapView {
                 let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
+                    logicalTiltHint: controller?.lastLogicalTilt,
                     visibleRegion: visibleRegion(mapView: mapView)
                 )
                 polylineController?.setCurrentCameraPosition(camera)
@@ -332,7 +335,9 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             if let mapView {
                 strategyManager.update(
                     content: content,
-                    initialCamera: mapView.mapboxMap.cameraState.toMapCameraPosition()
+                    initialCamera: mapView.mapboxMap.cameraState.toMapCameraPosition(
+                        logicalTiltHint: controller?.lastLogicalTilt
+                    )
                 )
             }
             groundImageController?.syncGroundImages(content.groundImages)
@@ -377,6 +382,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             guard let mapView, recognizer.state == .ended else { return }
             let point = recognizer.location(in: mapView)
             let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
+                logicalTiltHint: controller?.lastLogicalTilt,
                 visibleRegion: visibleRegion(mapView: mapView)
             )
             polylineController?.setCurrentCameraPosition(camera)
