@@ -10,12 +10,14 @@ public typealias MapboxMapDesignType = any MapboxMapDesignTypeProtocol
 public struct MapboxMapDesign: MapboxMapDesignTypeProtocol, Hashable {
     public let id: String
     public let styleURI: String
+    public let attributionRules: [AttributionRule]
 
     private static let mapboxBaseURL = "mapbox://styles/mapbox"
 
-    public init(id: String, styleURI: String) {
+    public init(id: String, styleURI: String, attributionRules: [AttributionRule] = []) {
         self.id = id
         self.styleURI = styleURI
+        self.attributionRules = attributionRules
     }
 
     public func getValue() -> String { styleURI }

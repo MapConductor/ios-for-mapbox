@@ -16,6 +16,7 @@ private class PassthroughContainerView: UIView {
 
 public struct MapboxMapView: View {
     @ObservedObject private var state: MapboxViewState
+    private let projection: MapProjection
 
     private let onMapLoaded: OnMapLoadedHandler<MapboxViewState>?
     private let onMapClick: OnMapEventHandler?
@@ -28,6 +29,7 @@ public struct MapboxMapView: View {
 
     public init(
         state: MapboxViewState,
+        projection: MapProjection = .mercator,
         onMapLoaded: OnMapLoadedHandler<MapboxViewState>? = nil,
         onMapClick: OnMapEventHandler? = nil,
         onMapLongClick: OnMapEventHandler? = nil,
@@ -38,6 +40,7 @@ public struct MapboxMapView: View {
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
+        self.projection = projection
         self.onMapLoaded = onMapLoaded
         self.onMapClick = onMapClick
         self.onMapLongClick = onMapLongClick
@@ -53,6 +56,7 @@ public struct MapboxMapView: View {
         return ZStack {
             MapboxMapViewRepresentable(
                 state: state,
+                projection: projection,
                 onMapLoaded: onMapLoaded,
                 onMapClick: onMapClick,
                 onMapLongClick: onMapLongClick,
@@ -65,6 +69,11 @@ public struct MapboxMapView: View {
             ForEach(0..<mapContent.views.count, id: \.self) { index in
                 mapContent.views[index]
             }
+            MapAttributionOverlay(
+                designRules: state.mapDesignType.attributionRules,
+                rasterLayers: mapContent.rasterLayers,
+                camera: state.cameraPosition
+            )
         }
     }
 }
@@ -73,6 +82,7 @@ public struct MapboxMapView: View {
 
 private struct MapboxMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: MapboxViewState
+    let projection: MapProjection
 
     let onMapLoaded: OnMapLoadedHandler<MapboxViewState>?
     let onMapClick: OnMapEventHandler?
@@ -86,6 +96,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             state: state,
+            projection: projection,
             onMapLoaded: onMapLoaded,
             onMapClick: onMapClick,
             onMapLongClick: onMapLongClick,
@@ -134,6 +145,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             uiView.mapboxMap.loadStyle(newStyleURI)
         }
         uiView.gestures.options.panEnabled = state.uiSettings.scrollGesture
+        context.coordinator.setProjection(projection, mapView: uiView)
         context.coordinator.updateContent(content)
         context.coordinator.updateInfoBubbleLayouts()
     }
@@ -147,6 +159,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject {
         private let state: MapboxViewState
+        private var projection: MapProjection
         private let onMapLoaded: OnMapLoadedHandler<MapboxViewState>?
         private let onMapClick: OnMapEventHandler?
         private let onMapLongClick: OnMapEventHandler?
@@ -195,6 +208,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
 
         init(
             state: MapboxViewState,
+            projection: MapProjection,
             onMapLoaded: OnMapLoadedHandler<MapboxViewState>?,
             onMapClick: OnMapEventHandler?,
             onMapLongClick: OnMapEventHandler?,
@@ -203,6 +217,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             onCameraMoveEnd: OnCameraMoveHandler?
         ) {
             self.state = state
+            self.projection = projection
             self.onMapLoaded = onMapLoaded
             self.onMapClick = onMapClick
             self.onMapLongClick = onMapLongClick
@@ -358,6 +373,7 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
 
         private func handleStyleLoaded(mapView: MapView) {
             isStyleLoaded = true
+            applyProjection(to: mapView)
             let mapboxMap: MapboxMap = mapView.mapboxMap
             groundImageController?.onStyleLoaded(mapboxMap)
             rasterController?.onStyleLoaded(mapboxMap)
@@ -374,6 +390,21 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
                 onMapLoaded?(state)
             }
             updateInfoBubbleLayouts()
+        }
+
+        func setProjection(_ projection: MapProjection, mapView: MapView) {
+            guard self.projection != projection else { return }
+            self.projection = projection
+            applyProjection(to: mapView)
+        }
+
+        private func applyProjection(to mapView: MapView) {
+            let name: StyleProjectionName = projection == .globe ? .globe : .mercator
+            do {
+                try mapView.mapboxMap.setProjection(StyleProjection(name: name))
+            } catch {
+                MCLog.map("Unable to set Mapbox projection: \(error)")
+            }
         }
 
         // MARK: - Gestures
