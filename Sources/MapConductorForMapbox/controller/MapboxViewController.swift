@@ -7,6 +7,7 @@ import UIKit
 
 final class MapboxViewController: MapViewControllerProtocol {
     let holder: AnyMapViewHolder
+    let typedHolder: MapboxMapViewHolder
     let coroutine = CoroutineScope()
     private weak var mapView: MapView?
     private var cameraAnimator: CameraAnimator?
@@ -21,7 +22,9 @@ final class MapboxViewController: MapViewControllerProtocol {
 
     init(mapView: MapView) {
         self.mapView = mapView
-        self.holder = AnyMapViewHolder(MapboxViewHolder(mapView: mapView))
+        let typedHolder = MapboxMapViewHolder(mapView: mapView)
+        self.typedHolder = typedHolder
+        self.holder = AnyMapViewHolder(typedHolder)
     }
 
     func clearOverlays() async {}

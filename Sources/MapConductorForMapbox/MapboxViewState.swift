@@ -10,7 +10,9 @@ public final class MapboxViewState: MapViewState<MapboxMapDesignType> {
     @Published private var _uiSettings: MapUISettings
 
     private var controller: (any MapViewControllerProtocol)?
-    private var mapViewHolder: AnyMapViewHolder?
+
+    /// Provider-typed holder: `mapView` is `MapView`, `map` is `MapboxMap`, no cast needed.
+    public private(set) var mapViewHolder: MapboxMapViewHolder?
 
     public override var id: String { stateId }
     public override var cameraPosition: MapCameraPosition { _cameraPosition }
@@ -68,7 +70,9 @@ public final class MapboxViewState: MapViewState<MapboxMapDesignType> {
         moveCameraTo(cameraPosition: updated, durationMillis: durationMillis)
     }
 
-    public override func getMapViewHolder() -> AnyMapViewHolder? { mapViewHolder }
+    public override func getMapViewHolder() -> AnyMapViewHolder? {
+        mapViewHolder.map { AnyMapViewHolder($0) }
+    }
 
     func setController(_ controller: (any MapViewControllerProtocol)?) {
         self.controller = controller
@@ -77,7 +81,7 @@ public final class MapboxViewState: MapViewState<MapboxMapDesignType> {
         }
     }
 
-    func setMapViewHolder(_ holder: AnyMapViewHolder?) {
+    func setMapViewHolder(_ holder: MapboxMapViewHolder?) {
         mapViewHolder = holder
     }
 

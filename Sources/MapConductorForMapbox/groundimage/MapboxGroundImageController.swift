@@ -60,6 +60,7 @@ final class MapboxGroundImageController {
     func handleTap(at coordinate: CLLocationCoordinate2D) -> Bool {
         let position = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
         guard let entity = groundImageManager.find(position: position) else { return false }
+        // 配送座標の wrap は GroundImageEvent の生成時に一元化済み。
         let event = GroundImageEvent(state: entity.state, clicked: position)
         entity.state.onClick?(event)
         return true
