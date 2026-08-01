@@ -78,11 +78,6 @@ final class MapboxCircleController: CircleController<Feature, MapboxCircleOverla
         return true
     }
 
-    // Override to re-compute pixel radius when zoom changes
-    override func onCameraChanged(mapCameraPosition: MapCameraPosition) async {
-        await renderer.onPostProcess()
-    }
-
     private func subscribeToCircle(_ state: CircleState) {
         guard circleSubscriptions[state.id] == nil else { return }
         circleSubscriptions[state.id] = state.asFlow()

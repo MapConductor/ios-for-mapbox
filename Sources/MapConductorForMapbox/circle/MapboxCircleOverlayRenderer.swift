@@ -54,24 +54,19 @@ final class MapboxCircleOverlayRenderer: AbstractCircleOverlayRenderer<Feature> 
 
     // MARK: - Helper
 
+    /// The core `circleToRing` generates the ring. The ring is unwrapped (continuous
+    /// longitudes around the center), and Mapbox GL accepts longitudes beyond +/-180, so a
+    /// circle crossing the antimeridian renders as a single polygon without splitting.
     private func makeFeature(for state: CircleState) -> Feature {
-        var feature = Feature(
-            geometry: .point(Point(CLLocationCoordinate2D(
-                latitude: state.center.latitude,
-                longitude: state.center.longitude
-            )))
-        )
+        let ring = closeRing(circleToRing(
+            center: state.center,
+            radiusMeters: state.radiusMeters,
+            geodesic: state.geodesic
+        ))
+        let coords = ring.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+        var feature = Feature(geometry: .polygon(Turf.Polygon(outerRing: Ring(coordinates: coords), innerRings: [])))
         feature.identifier = .string("circle-\(state.id)")
-
-        // circleRadius should use the SDK-native zoom. Adding the app-level +1 offset
-        // here halves metersPerPixel and makes the circle render at 2x radius.
-        let zoom = mapboxMap?.cameraState.zoom ?? 0.0
-        let metersPerPixel = mapboxMetersPerPixel(latitude: state.center.latitude, zoom: zoom)
-        let scale = max(1.0, Double(mapView?.contentScaleFactor ?? UIScreen.main.scale))
-        let radiusPoints = metersPerPixel > 0 ? (state.radiusMeters / metersPerPixel) / scale : 0.0
-
         feature.properties = [
-            CircleLayer.Prop.radiusPixels: .number(radiusPoints),
             CircleLayer.Prop.fillColor: .string(state.fillColor.toMapboxColorString()),
             CircleLayer.Prop.strokeColor: .string(state.strokeColor.toMapboxColorString()),
             CircleLayer.Prop.strokeWidth: .number(state.strokeWidth),
@@ -79,12 +74,4 @@ final class MapboxCircleOverlayRenderer: AbstractCircleOverlayRenderer<Feature> 
         ]
         return feature
     }
-}
-
-// MARK: - Meters per pixel helper
-
-internal func mapboxMetersPerPixel(latitude: Double, zoom: Double, tileSize: Int = 512) -> Double {
-    let earthCircumference = 40075016.686
-    let pixelsAtZoom = Double(tileSize) * pow(2.0, zoom)
-    return earthCircumference * cos(latitude * .pi / 180.0) / pixelsAtZoom
 }
