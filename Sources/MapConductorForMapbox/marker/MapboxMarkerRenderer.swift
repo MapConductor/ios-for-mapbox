@@ -281,7 +281,6 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
     private func ensureCustomIcon(_ icon: BitmapIcon, name: String) {
         guard let mapboxMap else { return }
         try? mapboxMap.addImage(icon.bitmap, id: name, sdf: false)
-        iconNameByMarkerId[icon.bitmap.description] = name
     }
 
     private func customIconName(for markerId: String) -> String {
