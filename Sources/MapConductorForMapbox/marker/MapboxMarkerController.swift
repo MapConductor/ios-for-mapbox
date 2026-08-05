@@ -10,6 +10,9 @@ import UIKit
 final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMarkerRenderer> {
     private weak var mapView: MapView?
     private var draggingMarkerId: String?
+    /// Panning is suppressed while a marker is dragged; remember what it was so
+    /// an app that set `uiSettings.scrollGesture = false` keeps that setting.
+    private var panEnabledBeforeDrag: Bool?
 
     private var markerSubscriptions: [String: AnyCancellable] = [:]
     private var markerStatesById: [String: MarkerState] = [:]
@@ -167,7 +170,6 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         MCLog.marker("MapboxMarkerController.handleTiledMarkerTap point=\(screenPoint) tiledCount=\(tiledMarkerIds.count)")
         guard !tiledMarkerIds.isEmpty, let mapView else { return false }
         let mapboxMap: MapboxMap = mapView.mapboxMap
-        let clickRadiusPt: CGFloat = 44
         var bestState: MarkerState? = nil
         var bestDist = CGFloat.infinity
 
@@ -178,8 +180,16 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
                 longitude: entity.state.position.longitude
             )
             let markerPoint = mapboxMap.point(for: coord)
+            // アイコン矩形 + tapTolerance で判定する（android の `find()` と同じ）。
+            // 以前は 44pt の固定半径で、アイコンの大きさを一切見ていなかった。
+            guard MarkerHitTest.hitsIcon(
+                touchScreen: screenPoint,
+                markerScreen: markerPoint,
+                state: entity.state
+            ) else { continue }
+            // 重なったマーカー同士は、アンカーがタップに近い方を優先する。
             let dist = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if dist < clickRadiusPt && dist < bestDist {
+            if dist < bestDist {
                 bestDist = dist
                 bestState = entity.state
             }
@@ -202,6 +212,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         case .began:
             guard let state = draggableMarkerState(at: point) else { return false }
             draggingMarkerId = state.id
+            panEnabledBeforeDrag = mapView.gestures.options.panEnabled
             mapView.gestures.options.panEnabled = false
             dispatchDragStart(state: state)
             onUpdateInfoBubble(state.id)
@@ -217,20 +228,20 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         case .ended:
             guard let markerId = draggingMarkerId,
                   let state = getMarkerState(for: markerId) else {
-                mapView.gestures.options.panEnabled = true
+                mapView.gestures.options.panEnabled = panEnabledBeforeDrag ?? true; panEnabledBeforeDrag = nil
                 draggingMarkerId = nil
                 return false
             }
             let coordinate = mapView.mapboxMap.coordinate(for: point)
             state.position = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
             dispatchDragEnd(state: state)
-            mapView.gestures.options.panEnabled = true
+            mapView.gestures.options.panEnabled = panEnabledBeforeDrag ?? true; panEnabledBeforeDrag = nil
             draggingMarkerId = nil
             onUpdateInfoBubble(markerId)
             return true
         case .cancelled, .failed:
             let wasDragging = draggingMarkerId != nil
-            mapView.gestures.options.panEnabled = true
+            mapView.gestures.options.panEnabled = panEnabledBeforeDrag ?? true; panEnabledBeforeDrag = nil
             draggingMarkerId = nil
             return wasDragging
         default:
@@ -330,7 +341,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     }
 
     func unbind() {
-        mapView?.gestures.options.panEnabled = true
+        mapView?.gestures.options.panEnabled = panEnabledBeforeDrag ?? true; panEnabledBeforeDrag = nil
         markerSubscriptions.values.forEach { $0.cancel() }
         markerSubscriptions.removeAll()
         markerStatesById.removeAll()
@@ -347,9 +358,10 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         destroy()
     }
 
+    /// ドラッグ開始時のヒットテスト。タップと同じ「アイコン矩形 + tapTolerance」で判定する
+    /// （以前は 44pt の固定半径で、アイコンの大きさを見ていなかった）。
     private func draggableMarkerState(at screenPoint: CGPoint) -> MarkerState? {
         guard let mapView else { return nil }
-        let clickRadiusPt: CGFloat = 44
         let candidates = markerManager.allEntities().map(\.state).filter(\.draggable)
         var bestState: MarkerState?
         var bestDistance = CGFloat.infinity
@@ -360,8 +372,13 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
                 longitude: state.position.longitude
             )
             let markerPoint = mapView.mapboxMap.point(for: coordinate)
+            guard MarkerHitTest.hitsIcon(
+                touchScreen: screenPoint,
+                markerScreen: markerPoint,
+                state: state
+            ) else { continue }
             let distance = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if distance < clickRadiusPt && distance < bestDistance {
+            if distance < bestDistance {
                 bestDistance = distance
                 bestState = state
             }

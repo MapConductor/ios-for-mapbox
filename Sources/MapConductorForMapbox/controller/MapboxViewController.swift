@@ -61,6 +61,26 @@ final class MapboxViewController: MapViewControllerProtocol {
         cameraAnimator?.start()
     }
 
+    func setCameraRestriction(_ restriction: CameraRestriction?) {
+        guard let mapView = mapView else { return }
+        // android-for-mapbox と同じく CameraBoundsOptions で範囲・ズームを一括指定する。
+        // 統一ズーム（Google 準拠）を Mapbox ズームへ変換して適用。
+        var bounds: CoordinateBounds?
+        if let sw = restriction?.bounds?.southWest, let ne = restriction?.bounds?.northEast {
+            bounds = CoordinateBounds(
+                southwest: CLLocationCoordinate2D(latitude: sw.latitude, longitude: sw.longitude),
+                northeast: CLLocationCoordinate2D(latitude: ne.latitude, longitude: ne.longitude)
+            )
+        }
+        let options = CameraBoundsOptions(
+            bounds: bounds,
+            // CameraBoundsOptions は CGFloat? を取るので明示変換する。
+            maxZoom: restriction?.maxZoom.map { CGFloat(MapboxZoomAltitudeConverter.googleZoomToMapboxZoom($0)) },
+            minZoom: restriction?.minZoom.map { CGFloat(MapboxZoomAltitudeConverter.googleZoomToMapboxZoom($0)) }
+        )
+        try? mapView.mapboxMap.setCameraBounds(with: options)
+    }
+
     func fitBounds(bounds: GeoRectBounds, padding: Int) {
         guard let mapView = mapView,
               let sw = bounds.southWest,

@@ -9,11 +9,13 @@ public struct MapboxMapView: View {
     @ObservedObject private var state: MapboxViewState
     private let projection: MapProjection
     private let handlers: MapViewHandlers<MapboxViewState>
+    private let cameraRestriction: CameraRestriction?
     private let content: () -> MapViewContent
 
     public init(
         state: MapboxViewState,
         projection: MapProjection = .mercator,
+        cameraRestriction: CameraRestriction? = nil,
         onMapLoaded: OnMapLoadedHandler<MapboxViewState>? = nil,
         onMapClick: OnMapEventHandler? = nil,
         onMapLongClick: OnMapEventHandler? = nil,
@@ -34,11 +36,18 @@ public struct MapboxMapView: View {
             onCameraMoveEnd: onCameraMoveEnd,
             sdkInitialize: sdkInitialize
         )
+        self.cameraRestriction = cameraRestriction
         self.content = content
     }
 
     public var body: some View {
-        let mapContent = content()
+        // The provider's registry is in scope only while content is being assembled —
+        // the same window in which Compose provides `LocalMapServiceRegistry` around the
+        // content lambda. Bracketing the pass lets a removed plugin be noticed.
+        let support = state.serviceRegistry.get(MarkerRenderingSupportKey.self)
+        support?.beginContentPass()
+        let mapContent = MapServiceRegistryScope.with(state.serviceRegistry) { content() }
+        support?.endContentPass()
         return MapViewBase(
             attributionRules: state.mapDesignType.attributionRules,
             camera: state.cameraPosition,
@@ -46,6 +55,7 @@ public struct MapboxMapView: View {
         ) {
             MapboxMapViewRepresentable(
                 state: state,
+                cameraRestriction: cameraRestriction,
                 projection: projection,
                 handlers: handlers,
                 content: mapContent
@@ -58,6 +68,7 @@ public struct MapboxMapView: View {
 
 private struct MapboxMapViewRepresentable: UIViewRepresentable {
     @ObservedObject var state: MapboxViewState
+    let cameraRestriction: CameraRestriction?
     let projection: MapProjection
     let handlers: MapViewHandlers<MapboxViewState>
     let content: MapViewContent
@@ -77,6 +88,12 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         let mapView = MapView(frame: .zero, mapInitOptions: initOptions)
         mapView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         mapView.gestures.options.panEnabled = state.uiSettings.scrollGesture
+        mapView.gestures.options.pinchZoomEnabled = state.uiSettings.zoomGesture
+        mapView.gestures.options.doubleTapToZoomInEnabled = state.uiSettings.zoomGesture
+        mapView.gestures.options.doubleTouchToZoomOutEnabled = state.uiSettings.zoomGesture
+        mapView.gestures.options.quickZoomEnabled = state.uiSettings.zoomGesture
+        mapView.gestures.options.rotateEnabled = state.uiSettings.rotateGesture
+        mapView.gestures.options.pitchEnabled = state.uiSettings.tiltGesture
 
         let tapGesture = UITapGestureRecognizer(
             target: context.coordinator,
@@ -95,6 +112,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         context.coordinator.attachInfoBubbleContainer(to: mapView)
         context.coordinator.mapView = mapView
         context.coordinator.bind(state: state, mapView: mapView)
+        // android-for-mapbox の MapboxMapView.kt と同じ位置で適用する。
+        context.coordinator.applyCameraRestriction(cameraRestriction)
         context.coordinator.updateContent(content)
         return mapView
     }
@@ -105,7 +124,15 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             uiView.mapboxMap.loadStyle(newStyleURI)
         }
         uiView.gestures.options.panEnabled = state.uiSettings.scrollGesture
+        uiView.gestures.options.pinchZoomEnabled = state.uiSettings.zoomGesture
+        uiView.gestures.options.doubleTapToZoomInEnabled = state.uiSettings.zoomGesture
+        uiView.gestures.options.doubleTouchToZoomOutEnabled = state.uiSettings.zoomGesture
+        uiView.gestures.options.quickZoomEnabled = state.uiSettings.zoomGesture
+        uiView.gestures.options.rotateEnabled = state.uiSettings.rotateGesture
+        uiView.gestures.options.pitchEnabled = state.uiSettings.tiltGesture
         context.coordinator.setProjection(projection, mapView: uiView)
+        // 制限値が変わったときだけ再適用する（毎フレーム native API を叩かない）。
+        context.coordinator.applyCameraRestriction(cameraRestriction)
         context.coordinator.updateContent(content)
         context.coordinator.updateInfoBubbleLayouts()
     }
@@ -118,6 +145,11 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
 
     @MainActor
     final class Coordinator: MapViewCoordinatorBase<MapboxViewState> {
+        /// android-sdk の `cameraRestriction?.let { controller.setCameraRestriction(it) }` 相当。
+        func applyCameraRestriction(_ restriction: CameraRestriction?) {
+            applyCameraRestriction(restriction, to: controller)
+        }
+
         private var projection: MapProjection
 
         weak var mapView: MapView?
@@ -140,7 +172,13 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
                 )
                 return MapboxMarkerRenderer(mapView: mapView, markerManager: strategy.markerManager, markerLayer: layer)
             },
-            shouldAddMarkers: { [weak self] in self?.isStyleLoaded ?? false }
+            shouldAddMarkers: { [weak self] in self?.isStyleLoaded ?? false },
+            currentCamera: { [weak self] in
+                guard let self, let mapView = self.mapView else { return nil }
+                return mapView.mapboxMap.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt
+                )
+            }
         )
 
         // MapboxMaps Cancelable observers
@@ -160,6 +198,13 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         }
 
         func bind(state: MapboxViewState, mapView: MapView) {
+            // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
+            // from the registry; this provider never learns that clustering exists.
+            // 再バインド時に前回の capability が残らないよう、登録前に空にする
+            // （android-sdk の各 *MapView.kt が `registry.clear()` してから put するのと同じ）。
+            state.serviceRegistry.clear()
+            state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+
             let controller = MapboxViewController(mapView: mapView)
             self.controller = controller
             state.setController(controller)
@@ -299,14 +344,6 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             infoBubbleController?.syncInfoBubbles(content.infoBubbles)
             markerController?.tilingOptions = content.markerTilingOptions
             markerController?.syncMarkers(content.markers)
-            if let mapView {
-                strategyManager.update(
-                    content: content,
-                    initialCamera: mapView.mapboxMap.cameraState.toMapCameraPosition(
-                        logicalTiltHint: controller?.lastLogicalTilt
-                    )
-                )
-            }
             groundImageController?.syncGroundImages(content.groundImages)
             overlayScope?.rasterLayerCollector.sync(content.rasterLayers.map { $0.state })
             overlayScope?.circleCollector.sync(content.circles.map { $0.state })
