@@ -1,13 +1,16 @@
-import Combine
 import MapboxMaps
 import MapConductorCore
 
 @MainActor
 final class MapboxRasterLayerController: RasterLayerController<MapboxRasterLayer, MapboxRasterLayerOverlayRenderer> {
-    private var rasterSubscriptions: [String: AnyCancellable] = [:]
-    private var rasterStatesById: [String: RasterLayerState] = [:]
-    private var latestStates: [RasterLayerState] = []
-    private var isStyleLoaded = false
+    /// スタイルが載るまでレイヤ追加を保留する門。
+    ///
+    /// スタイルを差し替えると、ランタイムに足したソースとレイヤはすべて捨てられる。
+    /// `MapViewScope` のコレクタは**メンバーシップが変わったときにしか**流してこないので、
+    /// 作り直すには最後の一式を覚えておく必要がある。門が `latest` として持っている。
+    private lazy var styleGate = DeferredUntilReady<[RasterLayerState]> { [weak self] states in
+        Task { [weak self] in await self?.applyToRenderer(states) }
+    }
 
     init(mapView: MapView?) {
         let rasterManager = RasterLayerManager<MapboxRasterLayer>()
@@ -16,102 +19,44 @@ final class MapboxRasterLayerController: RasterLayerController<MapboxRasterLayer
     }
 
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
-        isStyleLoaded = true
         renderer.onStyleLoaded(mapboxMap)
-        if !latestStates.isEmpty { syncDirectly(latestStates) }
+
+        // 新しいスタイルは前のスタイルに足したソース／レイヤを持たない。
+        // 覚えているハンドルを捨てて、全レイヤを作り直させる。
+        // マーカータイル（upsert 経由）は MapboxMarkerController が自分で貼り直す。
+        rasterLayerManager.clear()
+
+        styleGate.markReady()
     }
 
-    func syncRasterLayers(_ layers: [MapConductorCore.RasterLayer]) {
-        let newIds = Set(layers.map { $0.id })
-        let oldIds = Set(rasterStatesById.keys)
-        var newStatesById: [String: RasterLayerState] = [:]
-        var shouldSync = false
-
-        for layer in layers {
-            let state = layer.state
-            if let existing = rasterStatesById[state.id], existing !== state {
-                rasterSubscriptions[state.id]?.cancel()
-                rasterSubscriptions.removeValue(forKey: state.id)
-                shouldSync = true
-            }
-            newStatesById[state.id] = state
-            if !rasterLayerManager.hasEntity(state.id) { shouldSync = true }
-        }
-
-        if !shouldSync {
-            for (id, newState) in newStatesById {
-                if let entity = rasterLayerManager.getEntity(id),
-                   entity.fingerPrint != newState.fingerPrint() {
-                    shouldSync = true
-                    break
-                }
-            }
-        }
-
-        rasterStatesById = newStatesById
-        latestStates = layers.map { $0.state }
-        if oldIds != newIds { shouldSync = true }
-
-        for layer in layers { subscribeToRasterLayer(layer.state) }
-
-        for id in oldIds.subtracting(newIds) {
-            rasterSubscriptions[id]?.cancel()
-            rasterSubscriptions.removeValue(forKey: id)
-        }
-
-        guard isStyleLoaded, shouldSync else { return }
-        syncDirectly(layers.map { $0.state })
+    override func add(data: [RasterLayerState]) async {
+        styleGate.submit(data)
     }
 
-    private func syncDirectly(_ states: [RasterLayerState]) {
-        let previous = Set(rasterLayerManager.allEntities().map { $0.state.id })
-        let newIds = Set(states.map { $0.id })
-
-        for id in previous.subtracting(newIds) {
-            if let entity = rasterLayerManager.getEntity(id) {
-                renderer.removeLayerSync(entity: entity)
-                _ = rasterLayerManager.removeEntity(id)
-            }
-        }
-
-        for state in states {
-            if let prevEntity = rasterLayerManager.getEntity(state.id) {
-                if prevEntity.fingerPrint != state.fingerPrint() {
-                    if let updated = renderer.updateLayerSync(
-                        layer: prevEntity.layer!,
-                        current: RasterLayerEntity(layer: prevEntity.layer, state: state),
-                        prev: prevEntity
-                    ) {
-                        rasterLayerManager.registerEntity(RasterLayerEntity(layer: updated, state: state))
-                    }
-                }
-            } else {
-                if let newLayer = renderer.createLayerSync(state: state) {
-                    rasterLayerManager.registerEntity(RasterLayerEntity(layer: newLayer, state: state))
-                }
-            }
-        }
+    override func update(state: RasterLayerState) async {
+        styleGate.submit((styleGate.latest ?? []).map { $0.id == state.id ? state : $0 })
+        guard styleGate.isReady else { return }
+        await super.update(state: state)
     }
 
-    override func onCameraChanged(mapCameraPosition: MapCameraPosition) async {}
+    override func clear() async {
+        styleGate.submit([])
+        await super.clear()
+    }
 
-    private func subscribeToRasterLayer(_ state: RasterLayerState) {
-        guard rasterSubscriptions[state.id] == nil else { return }
-        rasterSubscriptions[state.id] = state.asFlow()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, self.rasterStatesById[state.id] != nil, self.isStyleLoaded else { return }
-                self.syncDirectly(self.latestStates)
-            }
+    // カメラ変更で非同期処理を起こさない。ラスタレイヤはカメラに追従する必要がない。
+    override func onCameraChanged(mapCameraPosition: MapCameraPosition) async {
     }
 
     func unbind() {
-        rasterSubscriptions.values.forEach { $0.cancel() }
-        rasterSubscriptions.removeAll()
-        rasterStatesById.removeAll()
-        latestStates.removeAll()
-        isStyleLoaded = false
+        styleGate.reset()
         renderer.unbind()
         destroy()
+    }
+
+    /// `super.add` はクロージャから直接呼べない（escaping クロージャで `super` を
+    /// 捕まえられない）ので、門からはこのメソッド経由で入る。
+    private func applyToRenderer(_ states: [RasterLayerState]) async {
+        await super.add(data: states)
     }
 }

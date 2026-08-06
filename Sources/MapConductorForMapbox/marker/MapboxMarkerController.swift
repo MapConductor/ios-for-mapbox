@@ -16,8 +16,11 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
 
     private var markerSubscriptions: [String: AnyCancellable] = [:]
     private var markerStatesById: [String: MarkerState] = [:]
-    private var latestStates: [MarkerState] = []
-    private var isStyleLoaded = false
+    /// スタイル読み込み待ちの取り込み。捨てずに保留し、`onStyleLoaded` で流す。
+    /// 「なぜ待つ必要があるか」は `DeferredUntilReady` の説明にある（実測 51 秒の件）。
+    private lazy var styleGate = DeferredUntilReady<[MarkerState]> { [weak self] states in
+        Task { [weak self] in await self?.add(data: states) }
+    }
 
     let onUpdateInfoBubble: (String) -> Void
 
@@ -69,19 +72,22 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         tileRouteId = routeId
     }
 
+    /// スタイル読み込み後、捨てられたソース／レイヤ・画像を作り直し、保留していた取り込みを流す。
+    ///
+    /// `renderer.onStyleLoaded` が `ensureAdded` → `ensureStyleImages` → `onPostProcess`
+    /// （＝マネージャから再描画）まで面倒を見るので、2 回目以降のスタイル読み込みは
+    /// ここだけで元に戻る。android-for-mapbox の `subscribeStyleLoaded` の中で
+    /// `attachOverlaySourcesAndLayers` → `ensureStyleImages` → `redraw()` をやっているのと同じ。
+    ///
+    /// 初回だけは取り込み自体がまだなので `add(data:)` を流す。`add` は fingerPrint で
+    /// 変化なしを弾くため、2 回目以降に呼ばれても実質ただの走査で終わる。
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
-        isStyleLoaded = true
         renderer.onStyleLoaded(mapboxMap)
         // Re-attach tile raster layer if there are already tiled markers
         if !tiledMarkerIds.isEmpty {
             updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: true)
         }
-        if !latestStates.isEmpty {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.add(data: self.latestStates)
-            }
-        }
+        styleGate.markReady()
     }
 
     func syncMarkers(_ markers: [Marker]) {
@@ -108,18 +114,16 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         }
 
         markerStatesById = newStatesById
-        latestStates = markers.map { $0.state }
 
-        if !shouldSyncList {
-            shouldSyncList = !markerManager.containsAllEntities(ids: newIds)
-        }
-
-        if isStyleLoaded, shouldSyncList {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.add(data: self.latestStates)
-            }
-        } else if isStyleLoaded {
+        // 準備前は「適用せずに最新を覚える」だけ。準備後は変化があったときだけ流す
+        // （MapLibre / MapTiler は毎回流すが、Mapbox はタイル描画で件数が桁違いになるため
+        //  変化なしの取り込みを避ける）。
+        let states = markers.map { $0.state }
+        if !styleGate.isReady {
+            styleGate.submit(states)
+        } else if shouldSyncList {
+            styleGate.submit(states)
+        } else {
             refreshTileLayerIfNeeded()
         }
 
@@ -345,8 +349,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         markerSubscriptions.values.forEach { $0.cancel() }
         markerSubscriptions.removeAll()
         markerStatesById.removeAll()
-        latestStates.removeAll()
-        isStyleLoaded = false
+        styleGate.reset()
         if let routeId = tileRouteId {
             TileServerRegistry.get().unregister(routeId: routeId)
         }

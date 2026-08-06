@@ -14,24 +14,38 @@ final class MarkerLayer {
     let sourceId: String
     let layerId: String
 
-    private var isAdded = false
-
     init(sourceId: String, layerId: String) {
         self.sourceId = sourceId
         self.layerId = layerId
     }
 
+    /// スタイルにソースとレイヤが載っていることを保証する。
+    ///
+    /// **「一度足した」を自前のフラグで覚えてはいけない。** `loadStyle`（地図デザインの
+    /// 変更）はランタイムに足したソース／レイヤをすべて捨てるので、フラグは即座に嘘になる。
+    /// 以前は `isAdded` を持っていて、デザインを切り替えるとここが早期 return し、
+    /// ソースが二度と作り直されずマーカーが消えたままになっていた（実機の
+    /// MapboxStyleReloadUITests が検出）。
+    ///
+    /// 真実はスタイル側にしかないので毎回 `sourceExists` / `layerExists` を見る。
+    /// android-for-mapbox が `subscribeStyleLoaded` のたびに
+    /// `attachOverlaySourcesAndLayers(style)` を無条件で呼び直しているのと同じ考え方。
     func ensureAdded(to mapboxMap: MapboxMap) {
-        guard !isAdded else { return }
-        guard !mapboxMap.sourceExists(withId: sourceId) else {
-            isAdded = true
-            return
+        if !mapboxMap.sourceExists(withId: sourceId) {
+            addSource(to: mapboxMap)
         }
+        if !mapboxMap.layerExists(withId: layerId) {
+            addLayer(to: mapboxMap)
+        }
+    }
 
+    private func addSource(to mapboxMap: MapboxMap) {
         var source = GeoJSONSource(id: sourceId)
         source.data = .featureCollection(FeatureCollection(features: []))
         try? mapboxMap.addSource(source)
+    }
 
+    private func addLayer(to mapboxMap: MapboxMap) {
         var layer = SymbolLayer(id: layerId, source: sourceId)
         layer.iconImage = .expression(Exp(.get) { Prop.iconId })
         layer.iconAnchor = .constant(.bottom)
@@ -55,7 +69,6 @@ final class MarkerLayer {
             }
         )
         try? mapboxMap.addLayer(layer)
-        isAdded = true
     }
 
     func setFeatures(_ features: [Feature], mapboxMap: MapboxMap) {
@@ -73,6 +86,5 @@ final class MarkerLayer {
         if mapboxMap.sourceExists(withId: sourceId) {
             try? mapboxMap.removeSource(withId: sourceId)
         }
-        isAdded = false
     }
 }

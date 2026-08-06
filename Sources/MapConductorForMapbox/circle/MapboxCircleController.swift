@@ -1,15 +1,16 @@
-import Combine
 import CoreLocation
 import MapboxMaps
 import MapConductorCore
 
+/// サークルの状態を集めるのは `OverlayCollector`（`MapOverlayScope.circleCollector`）で、
+/// `bindOverlayCollector` がここへ `add(data:)` / `update(state:)` を流す。
+/// コントローラは購読も差分も持たない。
+///
+/// 以前はここに `syncCircles` という自前の差分ループがあったが、コレクタ移行で
+/// 呼び出し元が無くなっていた（`updateContent` はコレクタに `sync` する）。
+/// `latestStates` / `isStyleLoaded` / 個別購読もその名残だったので落とした。
 @MainActor
 final class MapboxCircleController: CircleController<Feature, MapboxCircleOverlayRenderer> {
-    private var circleSubscriptions: [String: AnyCancellable] = [:]
-    private var circleStatesById: [String: CircleState] = [:]
-    private var latestStates: [CircleState] = []
-    private var isStyleLoaded = false
-
     init(mapView: MapView?) {
         let circleManager = CircleManager<Feature>()
         let layer = CircleLayer(
@@ -24,50 +25,16 @@ final class MapboxCircleController: CircleController<Feature, MapboxCircleOverla
         super.init(circleManager: circleManager, renderer: renderer)
     }
 
+    /// スタイルが載るたびに呼ばれる。捨てられたソース／レイヤを作り直してから、
+    /// **マネージャ**を元に描き直す（`onPostProcess` が `allEntities()` を読む）。
+    ///
+    /// android-for-mapbox が `subscribeStyleLoaded` の中で
+    /// `attachOverlaySourcesAndLayers` → `redraw()` をやっているのと同じ形。
+    /// マップ側の `circleCollector.flush()` も同じ集合を流し直すが、`add` は冪等なので重ならない。
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
-        isStyleLoaded = true
         renderer.onStyleLoaded(mapboxMap)
-        if !latestStates.isEmpty {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.add(data: self.latestStates)
-            }
-        }
-    }
-
-    func syncCircles(_ circles: [Circle]) {
-        let newIds = Set(circles.map { $0.id })
-        let oldIds = Set(circleStatesById.keys)
-        var newStatesById: [String: CircleState] = [:]
-        var shouldSyncList = false
-
-        for circle in circles {
-            let state = circle.state
-            if let existing = circleStatesById[state.id], existing !== state {
-                circleSubscriptions[state.id]?.cancel()
-                circleSubscriptions.removeValue(forKey: state.id)
-                shouldSyncList = true
-            }
-            newStatesById[state.id] = state
-            if !circleManager.hasEntity(state.id) { shouldSyncList = true }
-        }
-
-        circleStatesById = newStatesById
-        latestStates = circles.map { $0.state }
-        if oldIds != newIds { shouldSyncList = true }
-
-        if isStyleLoaded, shouldSyncList {
-            Task { [weak self] in
-                guard let self else { return }
-                await self.add(data: self.latestStates)
-            }
-        }
-
-        for circle in circles { subscribeToCircle(circle.state) }
-
-        for id in oldIds.subtracting(newIds) {
-            circleSubscriptions[id]?.cancel()
-            circleSubscriptions.removeValue(forKey: id)
+        Task { [weak self] in
+            await self?.renderer.onPostProcess()
         }
     }
 
@@ -78,25 +45,7 @@ final class MapboxCircleController: CircleController<Feature, MapboxCircleOverla
         return true
     }
 
-    private func subscribeToCircle(_ state: CircleState) {
-        guard circleSubscriptions[state.id] == nil else { return }
-        circleSubscriptions[state.id] = state.asFlow()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, self.circleStatesById[state.id] != nil else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.update(state: state)
-                }
-            }
-    }
-
     func unbind() {
-        circleSubscriptions.values.forEach { $0.cancel() }
-        circleSubscriptions.removeAll()
-        circleStatesById.removeAll()
-        latestStates.removeAll()
-        isStyleLoaded = false
         renderer.unbind()
         destroy()
     }

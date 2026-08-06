@@ -18,6 +18,7 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
     // MARK: - Sync operations (used by controller)
 
     func createLayerSync(state: RasterLayerState) -> MapboxRasterLayer? {
+        RasterHeaderRuleSet.warnUnsupported(provider: "Mapbox", state: state)
         guard let mapboxMap else { return nil }
         let sourceId = "mapconductor-raster-source-\(state.id)"
         let layerId = "mapconductor-raster-layer-\(state.id)"

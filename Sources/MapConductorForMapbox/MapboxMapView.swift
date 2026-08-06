@@ -123,6 +123,12 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         if let newStyleURI, uiView.mapboxMap.style.uri != newStyleURI {
             uiView.mapboxMap.loadStyle(newStyleURI)
         }
+        // ジェスチャはここ（updateUIView）で直接適用する。SwiftUI の同期フックは常に
+        // ネイティブビューを持っているのに対し、コントローラはまだ生成されていない／
+        // まだ mapView を保持していないことがあり、その場合に設定が落ちる（実機の
+        // UISettingsUITests が MapLibre/MapTiler/Mapbox で検出）。
+        // コントローラ側の `applyUISettings` は android-sdk と同じ API を提供するための
+        // 命令的な入口で、同じ値を同じネイティブプロパティへ書く。
         uiView.gestures.options.panEnabled = state.uiSettings.scrollGesture
         uiView.gestures.options.pinchZoomEnabled = state.uiSettings.zoomGesture
         uiView.gestures.options.doubleTapToZoomInEnabled = state.uiSettings.zoomGesture
@@ -153,7 +159,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         private var projection: MapProjection
 
         weak var mapView: MapView?
-        private var controller: MapboxViewController?
+        // updateUIView から applyUISettings を呼ぶため private を外している。
+        private(set) var controller: MapboxViewController?
         private var markerController: MapboxMarkerController?
         private var polylineController: MapboxPolylineController?
         private var polygonController: MapboxPolygonController?
@@ -200,14 +207,13 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         func bind(state: MapboxViewState, mapView: MapView) {
             // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
             // from the registry; this provider never learns that clustering exists.
-            // 再バインド時に前回の capability が残らないよう、登録前に空にする
-            // （android-sdk の各 *MapView.kt が `registry.clear()` してから put するのと同じ）。
-            state.serviceRegistry.clear()
             state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
 
             let controller = MapboxViewController(mapView: mapView)
             self.controller = controller
             state.setController(controller)
+            // 拡張モジュール（ヒートマップ等）がオーバーレイコントローラを登録できるようにする。
+            state.serviceRegistry.put(OverlayControllerRegistryKey.self, controller.overlayControllers)
             state.setMapViewHolder(controller.typedHolder)
 
             let markerController = MapboxMarkerController(mapView: mapView) { [weak self] id in
@@ -258,8 +264,17 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
                 }
             )
 
-            // Subscribe to style loaded
-            styleLoadedObserver = mapView.mapboxMap.onStyleLoaded.observeNext { [weak self] _ in
+            // Subscribe to style loaded.
+            //
+            // `observe` であって `observeNext` ではない。スタイルは 1 回しか載らないものでは
+            // なく、地図デザインを変えるたびに `loadStyle` で載せ直される。`observeNext` は
+            // 初回だけの購読なので、2 回目以降のスタイル読み込みでソース／レイヤの
+            // 再作成が走らず、オーバーレイが消えたまま戻らなかった（実機の
+            // MapboxStyleReloadUITests が検出）。
+            // android-for-mapbox の `subscribeStyleLoaded` も継続購読。
+            // 初回だけでよい処理（notifyMapInitialized / onMapLoaded）は
+            // `performMapLoadedOnce` 側で 1 回に抑えている。
+            styleLoadedObserver = mapView.mapboxMap.onStyleLoaded.observe { [weak self] _ in
                 self?.handleStyleLoaded(mapView: mapView)
             }
 
@@ -300,6 +315,11 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
         }
 
         func unbind() {
+            // 登録した capability を取り下げる。レジストリの持ち主は state で、ビューより長生きするため、
+            // ここで外さないと破棄済みのコントローラを掴んだまま残る。
+            state.serviceRegistry.removeProviderRegistrations()
+            // 登録済みオーバーレイコントローラ（拡張モジュール含む）を破棄する。
+            controller?.destroy()
             state.setController(nil)
             state.setMapViewHolder(nil)
             markerController?.renderer.animationOverlay?.unbind()

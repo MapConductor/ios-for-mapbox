@@ -35,8 +35,28 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
 
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
         markerLayer.ensureAdded(to: mapboxMap)
-        ensureDefaultIcon(mapboxMap: mapboxMap)
+        ensureStyleImages(mapboxMap: mapboxMap)
         Task { await onPostProcess() }
+    }
+
+    /// スタイルに載せ直す必要のあるアイコン画像を作り直す。
+    ///
+    /// `loadStyle`（地図デザインの変更）はソース／レイヤだけでなく **addImage した画像も**
+    /// 捨てる。フィーチャの `icon_id` は残るので、画像を入れ直さないとシンボルは
+    /// 「存在しない画像を指す」状態になり、何も描かれない（＝マーカーだけが消える）。
+    ///
+    /// android-for-mapbox の `ensureStyleImages(style)` の移植。あちらも
+    /// `subscribeStyleLoaded` のたびに既定アイコンと各マーカーのカスタムアイコンを
+    /// 入れ直している。
+    private func ensureStyleImages(mapboxMap: MapboxMap) {
+        ensureDefaultIcon(mapboxMap: mapboxMap)
+
+        for entity in markerManager.allEntities() {
+            guard let icon = entity.state.icon else { continue }
+            let iconName = customIconName(for: entity.state.id)
+            guard mapboxMap.imageExists(withId: iconName) == false else { continue }
+            try? mapboxMap.addImage(icon.toBitmapIcon().bitmap, id: iconName, sdf: false)
+        }
     }
 
     func unbind() {
