@@ -90,7 +90,6 @@ public class MapboxZoomAltitudeConverter : MapConductorCore.WebMercatorZoomAltit
     get
   }
   final public func toScreenOffset(position: any MapConductorCore.GeoPointProtocol) -> CoreFoundation.CGPoint?
-  final public func fromScreenOffset(offset: CoreFoundation.CGPoint) async -> MapConductorCore.GeoPoint?
   final public func fromScreenOffsetSync(offset: CoreFoundation.CGPoint) -> MapConductorCore.GeoPoint?
   @objc deinit
 }

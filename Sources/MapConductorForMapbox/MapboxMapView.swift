@@ -261,7 +261,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
                     let coordinate = CLLocationCoordinate2D(latitude: point.latitude, longitude: point.longitude)
                     let p = mapView.mapboxMap.point(for: coordinate)
                     return (p.x.isFinite && p.y.isFinite) ? p : nil
-                }
+                },
+                projectionGate: screenProjectionGate(feature: "marker animation overlay")
             )
 
             // Subscribe to style loaded.
