@@ -89,13 +89,10 @@ extension MapConductorCore.ZoomAltitudeConverterProtocol where Self == MapConduc
     get
   }
 }
-public class MapboxZoomAltitudeConverter : MapConductorCore.ZoomAltitudeConverterProtocol {
-  final public let zoom0Altitude: Swift.Double
-  public init(zoom0Altitude: Swift.Double = 171_319_879.0)
+public class MapboxZoomAltitudeConverter : MapConductorCore.WebMercatorZoomAltitudeConverter {
+  public init(zoom0Altitude: Swift.Double = AbstractZoomAltitudeConverter.defaultZoom0Altitude)
   public static func mapboxZoomToGoogleZoom(_ zoom: Swift.Double) -> Swift.Double
   public static func googleZoomToMapboxZoom(_ zoom: Swift.Double) -> Swift.Double
-  public func zoomLevelToAltitude(zoomLevel: Swift.Double, latitude: Swift.Double, tilt: Swift.Double) -> Swift.Double
-  public func altitudeToZoomLevel(altitude: Swift.Double, latitude: Swift.Double, tilt: Swift.Double) -> Swift.Double
   @objc deinit
 }
 @_hasMissingDesignatedInitializers final public class MapboxMapViewHolder : MapConductorCore.MapViewHolderProtocol {
