@@ -473,25 +473,15 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             infoBubbleController?.updateAllLayouts()
         }
 
+        /// 4 隅の逆投影は全プロバイダ共通なのでコアの ``buildVisibleRegion`` を使う。
+        ///
+        /// ★ ここで隅の取り違えが 1 件直っている。移行前は
+        /// `nearLeft = se`（右下）/ `nearRight = sw`（左下）/
+        /// `farLeft = ne`（右上）/ `farRight = nw`（左上）と**左右が入れ替わって**いた。
+        /// android と ios-for-maplibre はどちらも
+        /// nearLeft = 左下 / nearRight = 右下 / farLeft = 左上 / farRight = 右上。
         private func visibleRegion(mapView: MapView) -> VisibleRegion? {
-            let bounds = mapView.bounds
-            guard !bounds.isEmpty else { return nil }
-            let mapboxMap: MapboxMap = mapView.mapboxMap
-            let sw = mapboxMap.coordinate(for: CGPoint(x: 0, y: bounds.height))
-            let ne = mapboxMap.coordinate(for: CGPoint(x: bounds.width, y: 0))
-            let nw = mapboxMap.coordinate(for: CGPoint(x: 0, y: 0))
-            let se = mapboxMap.coordinate(for: CGPoint(x: bounds.width, y: bounds.height))
-            let geoBounds = GeoRectBounds(
-                southWest: GeoPoint(latitude: sw.latitude, longitude: sw.longitude, altitude: 0),
-                northEast: GeoPoint(latitude: ne.latitude, longitude: ne.longitude, altitude: 0)
-            )
-            return VisibleRegion(
-                bounds: geoBounds,
-                nearLeft: GeoPoint(latitude: se.latitude, longitude: se.longitude, altitude: 0),
-                nearRight: GeoPoint(latitude: sw.latitude, longitude: sw.longitude, altitude: 0),
-                farLeft: GeoPoint(latitude: ne.latitude, longitude: ne.longitude, altitude: 0),
-                farRight: GeoPoint(latitude: nw.latitude, longitude: nw.longitude, altitude: 0)
-            )
+            MapboxMapViewHolder(mapView: mapView).buildVisibleRegion()
         }
 
         private func handleStrategyTap(at point: CGPoint) async -> Bool {
