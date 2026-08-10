@@ -236,6 +236,15 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
             // Route the simple overlays through the shared collector so each
             // controller subscribes to one source of truth instead of the map
             // host re-diffing arrays every render.
+            // クリックカスケードとスロット解決がここから kind で引く。
+            // **登録を忘れるとタップに反応しなくなる。**
+            controller.registerOverlayController(markerController)
+            controller.registerOverlayController(circleController)
+            controller.registerOverlayController(polylineController)
+            controller.registerOverlayController(polygonController)
+            controller.registerOverlayController(groundImageController)
+            controller.registerOverlayController(rasterController)
+
             let overlayScope = MapOverlayScope()
             self.overlayScope = overlayScope
             bindOverlayCollector(overlayScope.circleCollector, to: circleController)
@@ -445,10 +454,13 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
                 }
                 let mapboxMap: MapboxMap = mapView.mapboxMap
                 let coordinate = mapboxMap.coordinate(for: point)
-                if self.circleController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
-                if self.polylineController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
-                if self.polygonController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
-                if self.groundImageController?.handleTap(at: coordinate) == true { self.updateInfoBubbleLayouts(); return }
+                // circle → groundImage → polyline → polygon の一本道。
+                // 順序と先勝ちはコアの dispatchOverlayTap が持つ。
+                let tapped = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+                if self.controller?.dispatchOverlayTap(position: tapped) == true {
+                    self.updateInfoBubbleLayouts()
+                    return
+                }
 
                 let geoPoint = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
                 self.controller?.notifyMapClick(geoPoint)
