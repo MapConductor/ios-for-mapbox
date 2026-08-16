@@ -8,68 +8,37 @@ extension ZoomAltitudeConverterProtocol where Self == MapboxZoomAltitudeConverte
     public static var mapbox: MapboxZoomAltitudeConverter { MapboxZoomAltitudeConverter() }
 }
 
-public class MapboxZoomAltitudeConverter: ZoomAltitudeConverterProtocol {
-    public let zoom0Altitude: Double
-
-    private let minZoomLevel: Double = 0.0
-    private let maxZoomLevel: Double = 22.0
-    private let minAltitude: Double = 100.0
-    private let maxAltitude: Double = 50_000_000.0
-    private let minCosLat: Double = 0.01
-    private let minCosTilt: Double = 0.05
-
-    public init(zoom0Altitude: Double = 171_319_879.0) {
-        self.zoom0Altitude = zoom0Altitude
+/// 統一ズーム（Google Maps 基準・256px タイル）⇄ 高度の変換。
+///
+/// Mapbox は 512px タイルのベクタエンジンなので、統一ズームはネイティブズーム + 1。
+/// 換算式はコアの ``WebMercatorZoomAltitudeConverter`` にある。
+///
+/// ## ★ 移行時に直した不具合
+///
+/// 移行前の実装は `mapboxZoomToGoogleZoom` / `googleZoomToMapboxZoom` を**宣言しながら
+/// `zoomLevelToAltitude` / `altitudeToZoomLevel` の中で一度も使っていなかった**。
+/// 呼び出し側（`MapCameraPositionExtensions`）はネイティブズームを渡しているので、
+/// オフセット +1 が抜けたぶん**高度が 2 倍**になっていた。
+///
+/// これが見えるのは `tilt < 0`（見上げ）の疑似表現だけで、そこでは
+/// `distanceForward = altitude * tan(tilt)` が 2 倍遠くへ寄る。
+/// android-for-mapbox と ios-for-maplibre はどちらも +1 を当てているので、
+/// **iOS の Mapbox だけが 2 倍ずれていた**ことになる。android に合わせて直した。
+///
+/// 移行前の値は `ios-sdk-core` の `zoom-golden.txt` に残してあり、
+/// `ZoomAltitudeConverterGoldenTests` が「旧＝オフセット 0 / 新＝オフセット 1」の
+/// 両方を固定している。
+public class MapboxZoomAltitudeConverter: WebMercatorZoomAltitudeConverter {
+    public init(zoom0Altitude: Double = AbstractZoomAltitudeConverter.defaultZoom0Altitude) {
+        super.init(zoom0Altitude: zoom0Altitude, zoomOffset: mapboxToGoogleZoomOffset)
     }
 
     public static func mapboxZoomToGoogleZoom(_ zoom: Double) -> Double {
-        (zoom + mapboxToGoogleZoomOffset).clamped(to: 0...22)
+        (zoom + mapboxToGoogleZoomOffset).clamped(to: 0 ... 22)
     }
 
     public static func googleZoomToMapboxZoom(_ zoom: Double) -> Double {
-        (zoom - mapboxToGoogleZoomOffset).clamped(to: 0...22)
-    }
-
-    public func zoomLevelToAltitude(
-        zoomLevel: Double,
-        latitude: Double,
-        tilt: Double
-    ) -> Double {
-        let clampedZoom = max(minZoomLevel, min(zoomLevel, maxZoomLevel))
-
-        let clampedLat = max(-85.0, min(latitude, 85.0))
-        let latitudeRadians = clampedLat * .pi / 180.0
-        let cosLat = max(abs(cos(latitudeRadians)), minCosLat)
-
-        let clampedTilt = max(0.0, min(tilt, 90.0))
-        let tiltRadians = clampedTilt * .pi / 180.0
-        let cosTilt = max(cos(tiltRadians), minCosTilt)
-
-        let distance = (zoom0Altitude * cosLat) / pow(2.0, clampedZoom)
-        let altitude = distance * cosTilt
-
-        return max(minAltitude, min(altitude, maxAltitude))
-    }
-
-    public func altitudeToZoomLevel(
-        altitude: Double,
-        latitude: Double,
-        tilt: Double
-    ) -> Double {
-        let clampedAltitude = max(minAltitude, min(altitude, maxAltitude))
-
-        let clampedLat = max(-85.0, min(latitude, 85.0))
-        let latitudeRadians = clampedLat * .pi / 180.0
-        let cosLat = max(abs(cos(latitudeRadians)), minCosLat)
-
-        let clampedTilt = max(0.0, min(tilt, 90.0))
-        let tiltRadians = clampedTilt * .pi / 180.0
-        let cosTilt = max(cos(tiltRadians), minCosTilt)
-
-        let distance = clampedAltitude / cosTilt
-        let zoomLevel = log2((zoom0Altitude * cosLat) / distance)
-
-        return max(minZoomLevel, min(zoomLevel, maxZoomLevel))
+        (zoom - mapboxToGoogleZoomOffset).clamped(to: 0 ... 22)
     }
 }
 

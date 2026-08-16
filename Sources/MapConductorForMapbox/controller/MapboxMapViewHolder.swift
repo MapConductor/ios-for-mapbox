@@ -23,10 +23,6 @@ public final class MapboxMapViewHolder: MapViewHolderProtocol {
         return point
     }
 
-    public func fromScreenOffset(offset: CGPoint) async -> GeoPoint? {
-        fromScreenOffsetSync(offset: offset)
-    }
-
     public func fromScreenOffsetSync(offset: CGPoint) -> GeoPoint? {
         let coord = mapView.mapboxMap.coordinate(for: offset)
         return GeoPoint(latitude: coord.latitude, longitude: coord.longitude, altitude: 0)

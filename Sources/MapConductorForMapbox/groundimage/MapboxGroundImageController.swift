@@ -3,7 +3,7 @@ import MapboxMaps
 import MapConductorCore
 
 @MainActor
-final class MapboxGroundImageController {
+final class MapboxGroundImageController: SlottedOverlayController {
     private let renderer: MapboxGroundImageOverlayRenderer
     private let groundImageManager: GroundImageManager<MapboxGroundImageHandle>
 
@@ -116,4 +116,26 @@ final class MapboxGroundImageController {
         renderer.unbind()
         groundImageManager.destroy()
     }
+    // ── SlottedOverlayController（カスケードとスロット解決） ─────────────
+    //
+    // ★ これを実装し忘れると、コントローラを登録してもタップに反応しない。
+
+    var zIndex: Int { 2 }
+
+    var kind: OverlayKind { .groundImage }
+
+    func hasId(_ id: String) -> Bool { groundImageManager.hasEntity(id) }
+
+    func resolveTap(position: GeoPointProtocol) -> OverlayHit? {
+        guard let hit = groundImageManager.find(position: position) else { return nil }
+        return OverlayHit(kind: .groundImage, clicked: position) {
+            // 配送座標の wrap は GroundImageEvent の生成時に一元化済み。
+            hit.state.onClick?(GroundImageEvent(state: hit.state, clicked: position))
+        }
+    }
+
+    func onCameraChanged(mapCameraPosition _: MapCameraPosition) async {}
+
+    func destroy() { unbind() }
+
 }
