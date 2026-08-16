@@ -1,11 +1,11 @@
 Pod::Spec.new do |s|
   s.name = "MapConductorForMapbox"
-  s.version = "1.2.0"
+  s.version = "1.3.1"
   s.summary = "MapConductor's Mapbox provider."
   s.license = { :type => "Apache-2.0" }
   s.author = "MapConductor"
   s.homepage = "https://github.com/MapConductor/ios-for-mapbox"
-  s.source = { :path => __dir__ }
+  s.source = { :git => "https://github.com/MapConductor/ios-for-mapbox.git", :tag => s.version.to_s }
   # Package.swift の `.iOS(.v17)` に合わせる。下げると MapboxMaps 11 系の
   # API（`mapboxMap.style.uri` 周辺）でコンパイルが通らない。
   s.platform = :ios, "17.0"
