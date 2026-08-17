@@ -10,6 +10,16 @@ Even using the wrapper API, you can still access the native Mapbox view if you w
 
 https://mapconductor.com/setup/ios/mapbox/
 
+### API key
+
+This module ships an initialiser. Call it once, before the first `MapboxMapView`:
+
+```swift
+initializeMapbox(accessToken: mapboxAccessToken)
+```
+
+Read the value from your build configuration rather than committing it.
+
 ## Usage
 
 ```swift
