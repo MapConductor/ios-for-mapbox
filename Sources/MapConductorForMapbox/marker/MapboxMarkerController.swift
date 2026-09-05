@@ -65,7 +65,12 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             tileSize: Self.retinaAwareTileSize,
             cacheSizeBytes: tilingOptions.cacheSize,
             debugTileOverlay: tilingOptions.debugTileOverlay,
-            iconScaleCallback: scaledCallback
+            iconScaleCallback: scaledCallback,
+            // Tile pixels, not points: the cell is compared against the
+            // destination rectangles the renderer has already rounded into the
+            // tile's own pixel grid. android-sdk passes the value through the
+            // same way, so the two show the same density at the same zoom.
+            declutterPx: tilingOptions.declutterPx
         )
         TileServerRegistry.get().register(routeId: routeId, provider: renderer)
         tileRenderer = renderer
