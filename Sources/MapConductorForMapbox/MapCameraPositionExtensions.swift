@@ -1,7 +1,7 @@
 import CoreLocation
 import Foundation
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 // Mapbox zoom is offset by +1.0 from "Google-style" zoom (same as MapLibre).
 internal let mapboxCameraZoomAdjustValue = 1.0
@@ -14,7 +14,7 @@ public extension MapCameraPosition {
             return CameraOptions(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
                 zoom: MapboxZoomAltitudeConverter.googleZoomToMapboxZoom(zoom),
-                bearing: bearing,
+                bearing: CameraBearing.toNativeHeading(bearing),
                 pitch: tilt
             )
         }
@@ -26,13 +26,13 @@ public extension MapCameraPosition {
         let maplibreZoomForAltitude = MapboxZoomAltitudeConverter.googleZoomToMapboxZoom(zoom)
         let altitude = converter.zoomLevelToAltitude(zoomLevel: maplibreZoomForAltitude, latitude: position.latitude, tilt: 0.0)
         let distanceForward = altitude * tan(tiltAbsRad)
-        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: bearing)
+        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: CameraBearing.toNativeHeading(bearing))
         let mapboxZoom = converter.altitudeToZoomLevel(altitude: altitude/cos(tiltAbsRad), latitude: target.latitude, tilt: 0.0)
         
         return CameraOptions(
             center: CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude),
             zoom: mapboxZoom,
-            bearing: bearing,
+            bearing: CameraBearing.toNativeHeading(bearing),
             pitch: tilt
         )
     }
@@ -55,7 +55,7 @@ public extension CameraState {
             return MapCameraPosition(
                 position: shiftedCenter,
                 zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(zoom),
-                bearing: bearing,
+                bearing: CameraBearing.bearingFromNativeHeading(bearing),
                 tilt: pitch,
                 visibleRegion: visibleRegion
             )
@@ -82,7 +82,7 @@ public extension CameraState {
         return MapCameraPosition(
             position: originalCenter,
             zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(originalMapboxZoom),
-            bearing: bearing,
+            bearing: CameraBearing.bearingFromNativeHeading(bearing),
             tilt: -pitchAbsDeg,
             visibleRegion: visibleRegion
         )
