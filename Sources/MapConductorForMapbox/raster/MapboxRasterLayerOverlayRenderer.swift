@@ -109,8 +109,30 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
         var layer = MapboxMaps.RasterLayer(id: layerId, source: sourceId)
         layer.rasterOpacity = .constant(state.opacity)
         layer.visibility = .constant(state.visible ? .visible : .none)
-        let layerPosition: LayerPosition = state.zIndex > 0 ? .at(state.zIndex) : .default
+        let layerPosition: LayerPosition = layerPosition(for: state, mapboxMap: mapboxMap)
         try? mapboxMap.addLayer(layer, layerPosition: layerPosition)
+    }
+
+    /// A raster overlay goes above the basemap's geometry but **below its
+    /// labels**.
+    ///
+    /// Added at the top of the style instead, it covers the place names, road
+    /// names and shields the backend draws -- a vector tile layer's own roads
+    /// run straight through them, which is what "the labels are under the
+    /// lines" looks like. Every raster overlay we add has the same problem, so
+    /// the rule lives here rather than in each of them.
+    ///
+    /// An explicit zIndex still wins: a caller that has said where the layer
+    /// goes has said it for a reason. Our own layers are skipped when looking
+    /// for the anchor -- markers are a symbol layer too, and anchoring to them
+    /// would put the raster back above the labels.
+    private func layerPosition(for state: RasterLayerState, mapboxMap: MapboxMap) -> LayerPosition {
+        if state.zIndex > 0 { return .at(state.zIndex) }
+        let anchor = mapboxMap.allLayerIdentifiers.first {
+            $0.type == .symbol && !$0.id.hasPrefix("mapconductor-")
+        }
+        guard let anchor else { return .default }
+        return .below(anchor.id)
     }
 
     private func removeIfExists(mapboxMap: MapboxMap, sourceId: String, layerId: String) {
