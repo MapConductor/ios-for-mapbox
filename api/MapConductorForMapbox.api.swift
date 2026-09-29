@@ -38,6 +38,7 @@ public struct MapboxMapDesign : MapConductorForMapbox.MapboxMapDesignTypeProtoco
   public static let SatelliteStreets: MapConductorForMapbox.MapboxMapDesign
   public static let NavigationDay: MapConductorForMapbox.MapboxMapDesign
   public static let NavigationNight: MapConductorForMapbox.MapboxMapDesign
+  public static let None: MapConductorForMapbox.MapboxMapDesign
   public static func custom(styleURI: Swift.String) -> MapConductorForMapbox.MapboxMapDesign
   public static func == (a: MapConductorForMapbox.MapboxMapDesign, b: MapConductorForMapbox.MapboxMapDesign) -> Swift.Bool
   public typealias Identifier = Swift.String
