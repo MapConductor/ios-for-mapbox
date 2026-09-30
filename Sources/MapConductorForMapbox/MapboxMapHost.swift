@@ -154,6 +154,14 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
         // from the registry; this provider never learns that clustering exists.
         state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+        // Mapbox draws vector styles natively: a layer with a style to show
+        // hands it over instead of rasterising it.
+        state.serviceRegistry.put(
+            VectorStyleSupportKey.self,
+            VectorStyleAsDesign(state: state, designId: { $0.id }) { url, rules in
+                MapboxMapDesign(id: "vector-style:\(url)", styleURI: url, attributionRules: rules)
+            }
+        )
 
         let controller = MapboxViewController(mapView: mapView)
         self.controller = controller
