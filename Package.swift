@@ -23,7 +23,7 @@ let package = Package(
     ],
     dependencies: [
         coreDependency,
-        .package(url: "https://github.com/mapbox/mapbox-maps-ios-binary", from: "11.32.0"),
+        .package(url: "https://github.com/mapbox/mapbox-maps-ios-binary", from: "11.33.0"),
     ],
     targets: [
         .target(
