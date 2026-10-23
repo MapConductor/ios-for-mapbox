@@ -189,33 +189,18 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         MCLog.marker("MapboxMarkerController.handleTiledMarkerTap point=\(screenPoint) tiledCount=\(tiledMarkerIds.count)")
         guard !tiledMarkerIds.isEmpty, let mapView else { return false }
         let mapboxMap: MapboxMap = mapView.mapboxMap
-        var bestState: MarkerState? = nil
-        var bestDist = CGFloat.infinity
-
-        for id in tiledMarkerIds {
-            guard let entity = markerManager.getEntity(id), entity.state.clickable else { continue }
-            let coord = CLLocationCoordinate2D(
-                latitude: entity.state.position.latitude,
-                longitude: entity.state.position.longitude
-            )
-            let markerPoint = mapboxMap.point(for: coord)
-            // アイコン矩形 + tapTolerance で判定する（android の `find()` と同じ）。
-            // 以前は 44pt の固定半径で、アイコンの大きさを一切見ていなかった。
-            guard MarkerHitTest.hitsIcon(
-                touchScreen: screenPoint,
-                markerScreen: markerPoint,
-                state: entity.state
-            ) else { continue }
-            // 重なったマーカー同士は、アンカーがタップに近い方を優先する。
-            let dist = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if dist < bestDist {
-                bestDist = dist
-                bestState = entity.state
-            }
-        }
+        // 選び方はコアの MarkerHitTest.pick と同じ。指の下にアイコン（ラベル込み）が描かれている
+        // マーカーを、アンカーの近い別のマーカーより優先する。
+        let candidates = tiledMarkerIds.compactMap { markerManager.getEntity($0)?.state }.filter(\.clickable)
+        let bestState = MarkerHitTest.pick(
+            touchScreen: screenPoint,
+            candidates: candidates,
+            state: { $0 },
+            project: { mapboxMap.point(for: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)) }
+        )
 
         if let state = bestState {
-            MCLog.marker("MapboxMarkerController.handleTiledMarkerTap hit id=\(state.id) dist=\(bestDist)")
+            MCLog.marker("MapboxMarkerController.handleTiledMarkerTap hit id=\(state.id)")
             dispatchClick(state: state)
             return true
         }
@@ -376,31 +361,18 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         destroy()
     }
 
-    /// ドラッグ開始時のヒットテスト。タップと同じ「アイコン矩形 + tapTolerance」で判定する
+    /// ドラッグ開始時のヒットテスト。タップと同じ ``MarkerHitTest/pick`` の規則で選ぶ
     /// （以前は 44pt の固定半径で、アイコンの大きさを見ていなかった）。
     private func draggableMarkerState(at screenPoint: CGPoint) -> MarkerState? {
         guard let mapView else { return nil }
         let candidates = markerManager.allEntities().map(\.state).filter(\.draggable)
-        var bestState: MarkerState?
-        var bestDistance = CGFloat.infinity
-
-        for state in candidates {
-            let coordinate = CLLocationCoordinate2D(
-                latitude: state.position.latitude,
-                longitude: state.position.longitude
-            )
-            let markerPoint = mapView.mapboxMap.point(for: coordinate)
-            guard MarkerHitTest.hitsIcon(
-                touchScreen: screenPoint,
-                markerScreen: markerPoint,
-                state: state
-            ) else { continue }
-            let distance = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if distance < bestDistance {
-                bestDistance = distance
-                bestState = state
-            }
-        }
+        let mapboxMap: MapboxMap = mapView.mapboxMap
+        let bestState = MarkerHitTest.pick(
+            touchScreen: screenPoint,
+            candidates: candidates,
+            state: { $0 },
+            project: { mapboxMap.point(for: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)) }
+        )
 
         return bestState
     }

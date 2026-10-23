@@ -17,7 +17,7 @@ Pod::Spec.new do |s|
   # `MapboxCommon`）は Mapbox の CDN から降りてくる。Maps SDK v11 は
   # ダウンロードトークン不要（実測: 認証なしで 200）。**実行時の公開アクセストークンは別途必要。**
   #
-  # SPM 側（Package.swift）は `mapbox-maps-ios-binary` から 11.28.0 を引いている。
+  # SPM 側（Package.swift）は `mapbox-maps-ios-binary` から 11.33.0 を引いている。
   # 同じ 11 系だが**解決経路が違う**ので、片方を上げたらもう片方も確認すること。
-  s.dependency "MapboxMaps", "~> 11.26"
+  s.dependency "MapboxMaps", "~> 11.33"
 end
