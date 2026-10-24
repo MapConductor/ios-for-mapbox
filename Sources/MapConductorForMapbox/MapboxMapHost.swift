@@ -136,6 +136,9 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
 
     // MapboxMaps Cancelable observers
     private var styleLoadedObserver: (any Cancelable)?
+
+    /// Keeps the mutation store listening for as long as this host lives.
+    private var styleLoadedSubscription: MapStyleInstallation?
     private var cameraChangedObserver: (any Cancelable)?
     private var cameraIdleObserver: (any Cancelable)?
 
@@ -154,6 +157,31 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
         // from the registry; this provider never learns that clustering exists.
         state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+        // Mapbox draws vector styles natively: a layer with a style to show
+        // hands it over instead of rasterising it.
+        state.serviceRegistry.put(
+            VectorStyleSupportKey.self,
+            VectorStyleAsDesign(state: state, designId: { $0.id }) { url, rules in
+                MapboxMapDesign(id: "vector-style:\(url)", styleURI: url, attributionRules: rules)
+            }
+        )
+        // Mapbox can also be told to change a loaded style in place, so
+        // adjusting one need not hand it a new document -- which would drop
+        // its tiles and rebuild every overlay the app added. `VectorStyle`
+        // looks this up and takes the cheap road when it is here.
+        let mutations = StyleMutationStore { [weak mapView] list in
+            applyStyleMutations(
+                MapboxStyleMutationTarget { mapView?.mapboxMap },
+                list
+            )
+        }
+        state.serviceRegistry.put(VectorStyleMutationSupportKey.self, mutations)
+        // Through the coordinator's own registry rather than a field here:
+        // the style installed on this map listens to the same signal, and
+        // both have to hear it.
+        styleLoadedSubscription = styleHost.onStyleLoaded { [weak mutations] in
+            mutations?.onStyleLoaded()
+        }
 
         let controller = MapboxViewController(mapView: mapView)
         self.controller = controller
@@ -356,6 +384,10 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         markerController?.onStyleLoaded(mapboxMap)
         strategyManager.renderer?.onStyleLoaded(mapboxMap)
         strategyManager.flush()
+        // Whatever a vector style adjustment applied is gone with the old
+        // style; this is where it goes back on. Everything that cares --
+        // the mutation store, the installed style -- hears it from here.
+        notifyStyleLoaded()
         performMapLoadedOnce {
             controller?.notifyMapInitialized()
             onMapLoaded?(state)
