@@ -22,6 +22,14 @@ final class MapboxGroundImageController: SlottedOverlayController {
 
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
         renderer.onStyleLoaded(mapboxMap)
+
+        // 新しいスタイルは前のスタイルに足したソース／レイヤを持たない。覚えている
+        // ハンドルを捨て、markReady が流す最後の一式で全部作り直させる。捨てないと
+        // 状態の変わらない画像は「適用済み」として飛ばされ、前のスタイルと一緒に消える。
+        // `MapboxRasterLayerController.onStyleLoaded` と同じ。同じスタイルで二度来ても、
+        // 作り直しは既存のソース／レイヤを消してから足すので重ならない。
+        groundImageManager.clear()
+
         styleGate.markReady()
     }
 

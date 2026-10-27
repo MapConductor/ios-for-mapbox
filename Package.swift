@@ -33,5 +33,11 @@ let package = Package(
                 .product(name: "MapboxMaps", package: "mapbox-maps-ios-binary"),
             ]
         ),
+        // Checked against a real MapView loading local styles, which needs no
+        // network and no real access token.
+        .testTarget(
+            name: "MapConductorForMapboxTests",
+            dependencies: ["MapConductorForMapbox"]
+        ),
     ]
 )
