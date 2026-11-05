@@ -285,8 +285,13 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
             self.updateInfoBubbleLayouts()
         }
 
+        // `onMapIdle` は「描画が一段落した」の通知で、カメラが止まったという意味ではない。
+        // 地図は何もしていなくても約 0.3 秒ごとに描き直して idle を出すので（iPad 実測で
+        // 25 秒に 53〜77 回）、そのまま流すと止まっている間も停止の通知が出続け、
+        // 停止のたびに重い処理を走らせるアプリが空回りする。動いた後の最初の idle だけを
+        // 停止とみなす。
         cameraIdleObserver = mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
-            guard let self else { return }
+            guard let self, isCameraMoving else { return }
             let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
                 logicalTiltHint: self.controller?.lastLogicalTilt,
                 visibleRegion: self.visibleRegion(mapView: mapView)
