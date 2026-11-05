@@ -261,6 +261,34 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         (state.icon ?? DefaultMarkerIcon()).toBitmapIcon()
     }
 
+    /// タイル担当のマーカーが変わったら、タイルを描き直させる。
+    ///
+    /// タイル担当のマーカーはネイティブのマーカーを持たないので、基底の `update` は
+    /// 管理表を書き換えるだけで地図には何も届かない。アイコンや位置をその場で
+    /// 書き換えても、描画済みのタイルは古い絵のまま残っていた。
+    override func update(state: MarkerState) async {
+        await super.update(state: state)
+        guard tiledMarkerIds.contains(state.id) else { return }
+        scheduleTileRefresh()
+    }
+
+    private var tileRefreshScheduled = false
+
+    /// 描き直しは 1 回にまとめる。ラベルの付け替えのように数百本が続けて変わると、
+    /// 1 本ごとにソースを差し替えて、そのたびに地図が全タイルを取り直す。
+    private func scheduleTileRefresh() {
+        guard !tileRefreshScheduled else { return }
+        tileRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.tileRefreshScheduled = false
+            guard let tileRenderer = self.tileRenderer, let mapboxMap = self.mapView?.mapboxMap else { return }
+            tileRenderer.invalidate()
+            self.tileVersion += 1
+            self.updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: !self.tiledMarkerIds.isEmpty)
+        }
+    }
+
     override func add(data: [MarkerState]) async {
         guard tilingOptions.enabled else {
             MCLog.marker("MapboxMarkerController.add tilingDisabled count=\(data.count)")
@@ -308,7 +336,12 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         guard let routeId = tileRouteId else { return }
         let server = TileServerRegistry.get()
         lastServerBaseUrl = server.baseUrl
-        let urlTemplate = server.urlTemplate(routeId: routeId, version: tileVersion)
+        // 版は URL に入れる。同じ URL のままだと地図は描画済みのタイルを取り直さない。
+        let urlTemplate = server.urlTemplate(
+            routeId: routeId,
+            tileSize: RasterLayerSource.defaultTileSize,
+            cacheKey: "v\(tileVersion)"
+        )
         let sourceId = tileSourceId ?? "mapconductor-tile-markers-source-\(routeId)"
         let layerId = tileLayerId ?? "mapconductor-tile-markers-layer-\(routeId)"
         tileSourceId = sourceId
