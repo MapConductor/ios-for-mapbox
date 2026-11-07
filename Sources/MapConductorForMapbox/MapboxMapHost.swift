@@ -72,6 +72,8 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         guard let mapView else { return }
         let newStyleURI = StyleURI(rawValue: state.mapDesignType.styleURI)
         if let newStyleURI, mapView.mapboxMap.style.uri != newStyleURI {
+            markerController?.onStyleLoading()
+            rasterController?.onStyleLoading()
             mapView.mapboxMap.loadStyle(newStyleURI)
         }
         // ジェスチャはここで直接適用する。SwiftUI の同期フックは常にネイティブビューを
