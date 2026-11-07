@@ -1,5 +1,5 @@
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 @MainActor
 final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer<MapboxRasterLayer> {
@@ -127,12 +127,31 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
     /// for the anchor -- markers are a symbol layer too, and anchoring to them
     /// would put the raster back above the labels.
     private func layerPosition(for state: RasterLayerState, mapboxMap: MapboxMap) -> LayerPosition {
+        if state.id == PolygonTiler.layerId { return polygonTilePosition(mapboxMap: mapboxMap) }
         if state.zIndex > 0 { return .at(state.zIndex) }
         let anchor = mapboxMap.allLayerIdentifiers.first {
             $0.type == .symbol && !$0.id.hasPrefix("mapconductor-")
         }
         guard let anchor else { return .default }
         return .below(anchor.id)
+    }
+
+    /// Polygon tiles are polygons drawn as images, not imagery: they go where the
+    /// SDK's own polygon layers do, over the basemap (labels included) and under
+    /// polylines, circles and markers. js-sdk-core's Mappls renderer places them
+    /// the same way.
+    private func polygonTilePosition(mapboxMap: MapboxMap) -> LayerPosition {
+        let overlays = [
+            "mapconductor-polygons-fill-",
+            "mapconductor-polygons-line-",
+            "mapconductor-polylines-layer-",
+            "mapconductor-circles-layer-",
+            "mapconductor-cluster-layer-",
+            "mapconductor-markers-layer-",
+            "mapconductor-tile-markers-layer-",
+        ]
+        let anchor = mapboxMap.allLayerIdentifiers.first { layer in overlays.contains { layer.id.hasPrefix($0) } }
+        return anchor.map { .below($0.id) } ?? .default
     }
 
     private func removeIfExists(mapboxMap: MapboxMap, sourceId: String, layerId: String) {
