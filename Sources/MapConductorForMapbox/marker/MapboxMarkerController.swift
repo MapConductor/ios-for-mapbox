@@ -307,6 +307,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             defaultMarkerIcon: defaultMarkerIconForTiling,
             tilingEnabled: tilingOptions.enabled,
             tiledMarkerIds: &localTiledMarkerIds,
+            addedTracker: addedTracker,
             shouldTile: { [shouldTileAll] _ in shouldTileAll }
         )
         tiledMarkerIds = localTiledMarkerIds
@@ -321,6 +322,9 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
                 MCLog.marker("MapboxMarkerController.add skipped updateTileLayer: mapboxMap not available")
             }
         }
+
+        // The newly tiled markers are on the map once their tile layer is.
+        await addedTracker.admitAndNotify(result.tiledAdded)
     }
 
     private func refreshTileLayerIfNeeded() {
