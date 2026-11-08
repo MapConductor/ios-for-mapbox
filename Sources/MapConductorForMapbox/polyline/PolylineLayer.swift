@@ -1,5 +1,6 @@
 import Foundation
 import MapboxMaps
+@_spi(MapConductorDriver) import MapConductorCore
 
 final class PolylineLayer {
     enum Prop {
@@ -40,7 +41,7 @@ final class PolylineLayer {
             layer.lineWidth = .expression(Exp(.toNumber) { Exp(.get) { Prop.strokeWidth } })
             layer.lineJoin = .constant(.round)
             layer.lineCap = .constant(.round)
-            try? mapboxMap.addLayer(layer)
+            MapboxOverlayStacking.add(layer, OverlayStackKey(.polyline), to: mapboxMap)
         }
     }
 

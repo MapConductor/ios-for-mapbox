@@ -359,7 +359,8 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         try? mapboxMap.addSource(source)
 
         let layer = RasterLayer(id: layerId, source: sourceId)
-        try? mapboxMap.addLayer(layer)
+        // マーカーのタイルはマーカーと同じ帯。
+        MapboxOverlayStacking.add(layer, OverlayStackKey(.marker), to: mapboxMap)
     }
 
     private func subscribeToMarker(_ state: MarkerState) {

@@ -1,5 +1,5 @@
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 @MainActor
 final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer<MapboxRasterLayer> {
@@ -45,7 +45,16 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
             NSLog("[MapConductor] RasterLayer debug mode: id=%@", current.state.id)
         }
         if finger.zIndex != prevFinger.zIndex {
-            try? mapboxMap.moveLayer(withId: layer.layerId, to: current.state.zIndex > 0 ? .at(current.state.zIndex) : .default)
+            zIndexByLayerId[layer.layerId] = current.state.zIndex
+            try? mapboxMap.moveLayer(
+                withId: layer.layerId,
+                to: MapboxOverlayStacking.position(
+                    for: OverlayStacking.rasterKey(stateId: current.state.id, zIndex: current.state.zIndex),
+                    in: mapboxMap,
+                    excluding: layer.layerId,
+                    rasterZIndex: zIndexByLayerId
+                )
+            )
         }
         if finger.opacity != prevFinger.opacity {
             try? mapboxMap.updateLayer(withId: layer.layerId, type: MapboxMaps.RasterLayer.self) { l in
@@ -113,27 +122,21 @@ final class MapboxRasterLayerOverlayRenderer: AbstractRasterLayerOverlayRenderer
         try? mapboxMap.addLayer(layer, layerPosition: layerPosition)
     }
 
-    /// A raster overlay goes above the basemap's geometry but **below its
-    /// labels**.
+    /// 帯の順の位置（ラスターの帯の中は zIndex、ベースマップのラベルの下）。``MapboxOverlayStacking`` を参照。
     ///
-    /// Added at the top of the style instead, it covers the place names, road
-    /// names and shields the backend draws -- a vector tile layer's own roads
-    /// run straight through them, which is what "the labels are under the
-    /// lines" looks like. Every raster overlay we add has the same problem, so
-    /// the rule lives here rather than in each of them.
-    ///
-    /// An explicit zIndex still wins: a caller that has said where the layer
-    /// goes has said it for a reason. Our own layers are skipped when looking
-    /// for the anchor -- markers are a symbol layer too, and anchoring to them
-    /// would put the raster back above the labels.
+    /// 以前は `zIndex > 0` をスタイル全体の生の添字（`.at(zIndex)`）として使っていて、
+    /// ベースマップのレイヤの間（多くは地図の下）へ入っていた。
     private func layerPosition(for state: RasterLayerState, mapboxMap: MapboxMap) -> LayerPosition {
-        if state.zIndex > 0 { return .at(state.zIndex) }
-        let anchor = mapboxMap.allLayerIdentifiers.first {
-            $0.type == .symbol && !$0.id.hasPrefix("mapconductor-")
-        }
-        guard let anchor else { return .default }
-        return .below(anchor.id)
+        zIndexByLayerId["mapconductor-raster-layer-\(state.id)"] = state.zIndex
+        return MapboxOverlayStacking.position(
+            for: OverlayStacking.rasterKey(stateId: state.id, zIndex: state.zIndex),
+            in: mapboxMap,
+            rasterZIndex: zIndexByLayerId
+        )
     }
+
+    /// 差し込み位置を決めるための、載せているラスターの zIndex（スタイルのレイヤは zIndex を持たない）。
+    private var zIndexByLayerId: [String: Int] = [:]
 
     private func removeIfExists(mapboxMap: MapboxMap, sourceId: String, layerId: String) {
         if mapboxMap.layerExists(withId: layerId) { try? mapboxMap.removeLayer(withId: layerId) }

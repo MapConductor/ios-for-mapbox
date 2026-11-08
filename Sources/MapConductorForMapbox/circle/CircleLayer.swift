@@ -1,5 +1,6 @@
 import Foundation
 import MapboxMaps
+@_spi(MapConductorDriver) import MapConductorCore
 
 /// Draws circles as "fill (FillLayer) + stroke (LineLayer)".
 ///
@@ -46,7 +47,7 @@ final class CircleLayer {
         if !mapboxMap.layerExists(withId: layerId) {
             var fillLayer = FillLayer(id: layerId, source: sourceId)
             fillLayer.fillColor = .expression(Exp(.toColor) { Exp(.get) { Prop.fillColor } })
-            try? mapboxMap.addLayer(fillLayer)
+            MapboxOverlayStacking.add(fillLayer, OverlayStackKey(.circle), to: mapboxMap)
         }
 
         if !mapboxMap.layerExists(withId: strokeLayerId) {
