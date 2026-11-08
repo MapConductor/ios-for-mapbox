@@ -1,5 +1,6 @@
 import Foundation
 import MapboxMaps
+@_spi(MapConductorDriver) import MapConductorCore
 
 final class MarkerLayer {
     enum Prop {
@@ -68,7 +69,7 @@ final class MarkerLayer {
                 Double(1)
             }
         )
-        try? mapboxMap.addLayer(layer)
+        MapboxOverlayStacking.add(layer, OverlayStackKey(.marker), to: mapboxMap)
     }
 
     func setFeatures(_ features: [Feature], mapboxMap: MapboxMap) {
