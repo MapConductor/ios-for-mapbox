@@ -229,6 +229,7 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         controller.registerOverlayController(polygonController)
         controller.registerOverlayController(groundImageController)
         controller.registerOverlayController(rasterController)
+        controller.clearOverlaysHandler = { [weak self] in await self?.clearOverlays() }
 
         let overlayScope = MapOverlayScope()
         self.overlayScope = overlayScope
@@ -312,6 +313,19 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
             self.onCameraMoveEnd?(camera)
             self.updateInfoBubbleLayouts()
         }
+    }
+
+    /// android-sdk の `clearOverlays()` と同じく、各オーバーレイのコントローラを空にする。
+    /// `controller.clearOverlaysHandler` から呼ばれる。
+    func clearOverlays() async {
+        await markerController?.clear()
+        await polylineController?.clear()
+        await polygonController?.clear()
+        await groundImageController?.clear()
+        await circleController?.clear()
+        await rasterController?.clear()
+        // strategy（クラスタリングなど）が描いたマーカーも消す。
+        await state.serviceRegistry.clearMarkerRendering()
     }
 
     public func unbind() {

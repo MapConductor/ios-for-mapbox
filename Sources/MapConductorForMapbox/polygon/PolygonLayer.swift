@@ -1,5 +1,6 @@
 import Foundation
 import MapboxMaps
+@_spi(MapConductorDriver) import MapConductorCore
 
 final class PolygonLayer {
     enum Prop {
@@ -40,7 +41,7 @@ final class PolygonLayer {
         if !mapboxMap.layerExists(withId: fillLayerId) {
             var fillLayer = FillLayer(id: fillLayerId, source: sourceId)
             fillLayer.fillColor = .expression(Exp(.toColor) { Exp(.get) { Prop.fillColor } })
-            try? mapboxMap.addLayer(fillLayer)
+            MapboxOverlayStacking.add(fillLayer, OverlayStackKey(.polygon), to: mapboxMap)
         }
 
         if !mapboxMap.layerExists(withId: lineLayerId) {
@@ -49,7 +50,7 @@ final class PolygonLayer {
             lineLayer.lineWidth = .expression(Exp(.toNumber) { Exp(.get) { Prop.strokeWidth } })
             lineLayer.lineJoin = .constant(.round)
             lineLayer.lineCap = .constant(.round)
-            try? mapboxMap.addLayer(lineLayer)
+            MapboxOverlayStacking.add(lineLayer, OverlayStackKey(.polygon), to: mapboxMap)
         }
     }
 
