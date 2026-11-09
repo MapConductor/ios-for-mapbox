@@ -33,7 +33,13 @@ final class MapboxViewController: MapViewControllerProtocol {
         self.holder = AnyMapViewHolder(typedHolder)
     }
 
-    func clearOverlays() async {}
+    /// ``clearOverlays()`` の中身。オーバーレイのコントローラはホストが持っているので、
+    /// ホストが生成時に設定する（android-sdk と同じく、各コントローラの `clear()` を呼ぶ）。
+    var clearOverlaysHandler: (@MainActor () async -> Void)?
+
+    func clearOverlays() async {
+        await clearOverlaysHandler?()
+    }
 
     func setCameraMoveStartListener(listener: OnCameraMoveHandler?) { cameraMoveStartListener = listener }
     func setCameraMoveListener(listener: OnCameraMoveHandler?) { cameraMoveListener = listener }
