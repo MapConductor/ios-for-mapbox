@@ -31,6 +31,14 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     private var tileRouteId: String?
     private var tileVersion: Int64 = 0
     private var tiledMarkerIds: Set<String> = []
+    /// Markers tiled while the style was loading. Their tile layer goes on the
+    /// map in `onStyleLoaded`, and their `onAdded` waits for it.
+    private var tiledAwaitingStyle: [MarkerState] = []
+    /// Whether the style the map shows is loaded. `MapboxMap.isStyleLoaded`
+    /// cannot answer this: it also waits for every source, so it turns false
+    /// whenever a layer is added. Cleared by ``onStyleLoading()`` when the
+    /// host starts loading a new map design, set by `onStyleLoaded`.
+    private var styleLoaded = false
     private var tileSourceId: String?
     private var tileLayerId: String?
     private var lastServerBaseUrl: String = ""
@@ -86,12 +94,20 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     ///
     /// 初回だけは取り込み自体がまだなので `add(data:)` を流す。`add` は fingerPrint で
     /// 変化なしを弾くため、2 回目以降に呼ばれても実質ただの走査で終わる。
+    /// The host started loading a new map design: the layers on the map go with
+    /// the old style, and the tile layer goes back on in `onStyleLoaded`.
+    func onStyleLoading() {
+        styleLoaded = false
+    }
+
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
         renderer.onStyleLoaded(mapboxMap)
         // Re-attach tile raster layer if there are already tiled markers
         if !tiledMarkerIds.isEmpty {
             updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: true)
         }
+        styleLoaded = true
+        reportTiledAwaitingStyle()
         styleGate.markReady()
     }
 
@@ -307,6 +323,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             defaultMarkerIcon: defaultMarkerIconForTiling,
             tilingEnabled: tilingOptions.enabled,
             tiledMarkerIds: &localTiledMarkerIds,
+            addedTracker: addedTracker,
             shouldTile: { [shouldTileAll] _ in shouldTileAll }
         )
         tiledMarkerIds = localTiledMarkerIds
@@ -320,6 +337,15 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             } else {
                 MCLog.marker("MapboxMarkerController.add skipped updateTileLayer: mapboxMap not available")
             }
+        }
+
+        // The newly tiled markers are on the map once their tile layer is. While
+        // the style loads there is no layer: `onStyleLoaded` adds it, and reports
+        // these then.
+        if styleLoaded {
+            await addedTracker.admitAndNotify(result.tiledAdded)
+        } else {
+            tiledAwaitingStyle.append(contentsOf: result.tiledAdded)
         }
     }
 
@@ -378,7 +404,18 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             }
     }
 
+    /// The markers tiled while the style loaded are on the map now that their
+    /// tile layer is. Those removed or drawn natively since are not reported
+    /// here (a native one was reported when it was drawn).
+    private func reportTiledAwaitingStyle() {
+        guard !tiledAwaitingStyle.isEmpty else { return }
+        let landed = tiledAwaitingStyle.filter { tiledMarkerIds.contains($0.id) }
+        tiledAwaitingStyle.removeAll()
+        Task { [addedTracker] in await addedTracker.admitAndNotify(landed) }
+    }
+
     func unbind() {
+        tiledAwaitingStyle.removeAll()
         mapView?.gestures.options.panEnabled = panEnabledBeforeDrag ?? true; panEnabledBeforeDrag = nil
         markerSubscriptions.values.forEach { $0.cancel() }
         markerSubscriptions.removeAll()

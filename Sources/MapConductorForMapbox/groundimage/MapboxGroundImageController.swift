@@ -1,11 +1,13 @@
 import Combine
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 @MainActor
 final class MapboxGroundImageController: SlottedOverlayController {
     private let renderer: MapboxGroundImageOverlayRenderer
     private let groundImageManager: GroundImageManager<MapboxGroundImageHandle>
+    /// Which ground images have reached the map, for their `onAdded`.
+    private let addedTracker = OverlayAddedTracker()
 
     private var groundImageSubscriptions: [String: AnyCancellable] = [:]
     private var groundImageStatesById: [String: GroundImageState] = [:]
@@ -91,6 +93,9 @@ final class MapboxGroundImageController: SlottedOverlayController {
     private func syncDirectly(_ states: [GroundImageState]) {
         let previous = Set(groundImageManager.allEntities().map { $0.state.id })
         let newIds = Set(states.map { $0.id })
+        // The app's list: anything it no longer has can be added again later.
+        addedTracker.retain(newIds)
+        var created: [GroundImageState] = []
 
         for id in previous.subtracting(newIds) {
             if let entity = groundImageManager.getEntity(id) {
@@ -113,9 +118,13 @@ final class MapboxGroundImageController: SlottedOverlayController {
             } else {
                 if let handle = renderer.createGroundImageSync(state: state) {
                     groundImageManager.registerEntity(GroundImageEntity(groundImage: handle, state: state))
+                    created.append(state)
                 }
             }
         }
+        // On the main actor, right after the layers were created. A style reload
+        // re-creates them without calling `onAdded` again: the tracker still has them.
+        for state in addedTracker.admit(created) { state.callOnAdded() }
     }
 
     private func subscribeToGroundImage(_ state: GroundImageState) {
@@ -142,6 +151,7 @@ final class MapboxGroundImageController: SlottedOverlayController {
     }
 
     func unbind() {
+        addedTracker.reset()
         groundImageSubscriptions.values.forEach { $0.cancel() }
         groundImageSubscriptions.removeAll()
         groundImageStatesById.removeAll()
