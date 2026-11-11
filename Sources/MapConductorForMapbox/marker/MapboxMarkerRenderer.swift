@@ -5,10 +5,12 @@ import MapboxMaps
 import UIKit
 
 @MainActor
-final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
+final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol, MarkerDrawOrderFrameReceiver {
     typealias ActualMarker = Feature
 
     private weak var mapView: MapView?
+    /// 重なり順を出すときの地図の向き（``MarkerDrawOrder``）。回すとコントローラが差し替える。
+    private var drawOrderFrame: MarkerDrawOrder.Frame = .northUp
     private var mapboxMap: MapboxMap? { mapView?.mapboxMap }
 
     let markerLayer: MarkerLayer
@@ -204,6 +206,29 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
         markerLayer.setFeatures(features, mapboxMap: mapboxMap)
     }
 
+    /// マーカー帯の中の重なり順（``MarkerDrawOrder``）。`symbol-sort-key` は小さいものから描く。
+    private func sortKey(_ state: MarkerState) -> Double {
+        MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position, frame: drawOrderFrame)
+    }
+
+    /// 回したら、同じ zIndex の中の順位（画面で下ほど手前）を付け直す。`symbol-sort-key` は
+    /// 画面の向きを知らないので、地物の値を書き換えてソースへ送り直すしかない。ふつうのマーカーは
+    /// 回し終えたとき（0.5 度以上回したときだけ）に呼ばれ、回している最中は前の並びのまま。
+    func onDrawOrderFrameChanged(_ frame: MarkerDrawOrder.Frame, entities: [MarkerEntity<Feature>]) async {
+        drawOrderFrame = frame
+        var changed = false
+        for entity in entities {
+            guard var feature = entity.marker else { continue }
+            let key = JSONValue.number(sortKey(entity.state))
+            if feature.properties?[MarkerLayer.Prop.sortKey] != key {
+                feature.properties?[MarkerLayer.Prop.sortKey] = key
+                entity.marker = feature
+                changed = true
+            }
+        }
+        if changed { await onPostProcess() }
+    }
+
     // MARK: - Helpers
 
     func markerId(at point: CGPoint) async -> String? {
@@ -248,7 +273,7 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
             MarkerLayer.Prop.iconOffsetX: .number(offset.x),
             MarkerLayer.Prop.iconOffsetY: .number(offset.y),
             MarkerLayer.Prop.isHidden: .number(state.getAnimation() != nil ? 1 : 0),
-            MarkerLayer.Prop.sortKey: .number(MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position))
+            MarkerLayer.Prop.sortKey: .number(sortKey(state))
         ]
         return feature
     }
@@ -291,7 +316,7 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
             }
         }
         // zIndex か位置が変わると順位も変わる。
-        props[MarkerLayer.Prop.sortKey] = .number(MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position))
+        props[MarkerLayer.Prop.sortKey] = .number(sortKey(state))
         feature.properties = props
     }
 
