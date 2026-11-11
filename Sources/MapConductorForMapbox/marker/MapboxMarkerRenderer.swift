@@ -1,7 +1,7 @@
 import CoreLocation
 import Foundation
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 @MainActor
@@ -247,7 +247,8 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
             MarkerLayer.Prop.iconId: .string(iconName),
             MarkerLayer.Prop.iconOffsetX: .number(offset.x),
             MarkerLayer.Prop.iconOffsetY: .number(offset.y),
-            MarkerLayer.Prop.isHidden: .number(state.getAnimation() != nil ? 1 : 0)
+            MarkerLayer.Prop.isHidden: .number(state.getAnimation() != nil ? 1 : 0),
+            MarkerLayer.Prop.sortKey: .number(MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position))
         ]
         return feature
     }
@@ -289,6 +290,8 @@ final class MapboxMarkerRenderer: MarkerOverlayRendererProtocol {
                 props[MarkerLayer.Prop.iconOffsetY] = .number(offset.y)
             }
         }
+        // zIndex か位置が変わると順位も変わる。
+        props[MarkerLayer.Prop.sortKey] = .number(MarkerDrawOrder.key(zIndex: state.zIndex, position: state.position))
         feature.properties = props
     }
 
