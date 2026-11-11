@@ -44,7 +44,8 @@ final class MapboxCircleOverlayRenderer: AbstractCircleOverlayRenderer<Feature> 
 
     override func onPostProcess() async {
         guard let mapboxMap else { return }
-        let features = circleManager.allEntities().compactMap { entity -> Feature? in
+        let features = circleManager.nativeEntities().compactMap { entity -> Feature? in
+            guard entity.circle != nil else { return nil }
             let updated = makeFeature(for: entity.state)
             entity.circle = updated
             return updated
