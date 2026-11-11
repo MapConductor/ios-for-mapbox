@@ -230,6 +230,15 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
             }
         }
         polylineController.tiler = polylineTiler
+        let circleTiler = CircleTiler()
+        circleTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(CircleTiler.layerId)
+            }
+        }
+        circleController.tiler = circleTiler
 
         // Route the simple overlays through the shared collector so each
         // controller subscribes to one source of truth instead of the map
@@ -387,6 +396,7 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
                 visibleRegion: visibleRegion(mapView: mapView)
             )
             polylineController?.setCurrentCameraPosition(camera)
+            circleController?.setCurrentCameraPosition(camera)
         }
         infoBubbleController?.syncInfoBubbles(content.infoBubbles)
         markerController?.tilingOptions = content.markerTilingOptions
@@ -398,7 +408,9 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
         polygonController?.tiler?.refreshIfServerMoved()
         if polylineController?.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+        if circleController?.tiler?.setOptions(content.circleTilingOptions) == true { overlayScope?.circleCollector.flush() }
         polylineController?.tiler?.refreshIfServerMoved()
+        circleController?.tiler?.refreshIfServerMoved()
         for handler in content.polygonSyncHandlers {
             let hullController = hullPolygonController
             handler.bindPolygonSync { [weak hullController] states in
@@ -466,6 +478,7 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
             visibleRegion: visibleRegion(mapView: mapView)
         )
         polylineController?.setCurrentCameraPosition(camera)
+        circleController?.setCurrentCameraPosition(camera)
         Task { [weak self] in
             guard let self else { return }
             if await self.markerController?.handleTap(at: point) == true {
