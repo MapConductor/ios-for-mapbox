@@ -7,12 +7,21 @@ import MapboxMaps
 internal let mapboxCameraZoomAdjustValue = 1.0
 private let converter = MapboxZoomAltitudeConverter()
 
+/// Mapbox のカメラの縦の視野角（度）。Mapbox Maps の既定値（`2·atan(1/3)`）で、
+/// iPad Pro 11 の実測（tilt 30°〜60°）でも一致した。
+let mapboxVerticalFieldOfView: Double = 36.87
+
 public extension MapCameraPosition {
     /// Convert to Mapbox CameraOptions with adjusted zoom.
     func toMapboxCameraOptions() -> CameraOptions {
+        // パディングはネイティブの CameraOptions.padding へ。中心はパディングを除いた領域の中央に来る。
+        let padding = paddings.map {
+            UIEdgeInsets(top: $0.top, left: $0.left, bottom: $0.bottom, right: $0.right)
+        }
         if tilt >= 0 {
             return CameraOptions(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
+                padding: padding,
                 zoom: MapboxZoomAltitudeConverter.googleZoomToMapboxZoom(zoom),
                 bearing: CameraBearing.toNativeHeading(bearing),
                 pitch: tilt
@@ -31,6 +40,7 @@ public extension MapCameraPosition {
         
         return CameraOptions(
             center: CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude),
+            padding: padding,
             zoom: mapboxZoom,
             bearing: CameraBearing.toNativeHeading(bearing),
             pitch: tilt
@@ -49,6 +59,7 @@ public extension CameraState {
         visibleRegion: VisibleRegion? = nil
     ) -> MapCameraPosition {
         let pitchAbsDeg = min(abs(pitch), 90.0)
+        let readPaddings = MapPaddings(top: padding.top, left: padding.left, bottom: padding.bottom, right: padding.right)
         let shiftedCenter = GeoPoint(latitude: center.latitude, longitude: center.longitude)
 
         guard let logicalTiltHint, logicalTiltHint < 0.0, pitchAbsDeg > 0.0 else {
@@ -57,7 +68,9 @@ public extension CameraState {
                 zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(zoom),
                 bearing: CameraBearing.bearingFromNativeHeading(bearing),
                 tilt: pitch,
-                visibleRegion: visibleRegion
+                paddings: readPaddings,
+                visibleRegion: visibleRegion,
+                fov: mapboxVerticalFieldOfView
             )
         }
 
@@ -84,7 +97,9 @@ public extension CameraState {
             zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(originalMapboxZoom),
             bearing: CameraBearing.bearingFromNativeHeading(bearing),
             tilt: -pitchAbsDeg,
-            visibleRegion: visibleRegion
+            paddings: readPaddings,
+            visibleRegion: visibleRegion,
+            fov: mapboxVerticalFieldOfView
         )
     }
 }
