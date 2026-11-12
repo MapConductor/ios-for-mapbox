@@ -18,6 +18,13 @@ final class MapboxViewController: MapViewControllerProtocol {
     private weak var mapView: MapView?
     private var cameraAnimator: CameraAnimator?
     private(set) var lastLogicalTilt: Double?
+    /// 最後に指定されたパディング。`CameraOptions.padding` には当てず、カメラの中心をずらして
+    /// 再現する（``CameraPaddingEmulation``）。読み戻しでは逆にずらす。
+    ///
+    /// ネイティブのパディングは視野を上へ広げる。tilt があると上のパディングが大きいほど
+    /// 画面の上端が地平線の向こうまで届き、タイルを地平線まで読み込んで固まる。中心を
+    /// ずらせば視野はパディングが無いときと同じになる（Google / HERE と同じ方式）。
+    private(set) var lastPaddings: MapPaddingsProtocol?
 
     private var cameraMoveStartListener: OnCameraMoveHandler?
     private var cameraMoveListener: OnCameraMoveHandler?
@@ -51,7 +58,10 @@ final class MapboxViewController: MapViewControllerProtocol {
     func moveCamera(position: MapCameraPosition) {
         guard let mapView else { return }
         lastLogicalTilt = position.tilt
-        mapView.mapboxMap.setCamera(to: position.toMapboxCameraOptions())
+        if let paddings = position.paddings { lastPaddings = paddings }
+        let requested = position.copy(paddings: lastPaddings ?? MapPaddings.Zeros)
+        mapView.mapboxMap.setCamera(to: paddingApplied(requested, to: mapView).toMapboxCameraOptions())
+        scheduleCorrection(requested)
     }
 
     func animateCamera(position: MapCameraPosition, duration: Long) {
@@ -62,15 +72,67 @@ final class MapboxViewController: MapViewControllerProtocol {
             return
         }
         cameraAnimator?.stop()
+        // 補間は「地図に渡す中心」の空間で行う（from は地図の生の中心、to はずらした中心）。
         let from = mapView.mapboxMap.cameraState.toMapCameraPosition(logicalTiltHint: lastLogicalTilt)
         lastLogicalTilt = position.tilt
+        if let paddings = position.paddings { lastPaddings = paddings }
+        let requested = position.copy(paddings: lastPaddings ?? MapPaddings.Zeros)
         cameraAnimator = CameraAnimator(
             mapView: mapView,
             from: from,
-            to: position,
-            duration: durationSeconds
+            to: paddingApplied(requested, to: mapView),
+            duration: durationSeconds,
+            completion: { [weak self] in self?.scheduleCorrection(requested) }
         )
         cameraAnimator?.start()
+    }
+
+    /// 地図に渡すカメラ。パディングの分だけ中心をずらし、ネイティブのパディングは 0。
+    private func paddingApplied(_ requested: MapCameraPosition, to mapView: MapView) -> MapCameraPosition {
+        CameraPaddingEmulation.applied(
+            to: requested,
+            fov: mapboxVerticalFieldOfView,
+            viewportSize: mapView.bounds.size
+        ).copy(paddings: MapPaddings.Zeros)
+    }
+
+    /// 補正の世代。新しい移動が始まったら、前の移動の補正は捨てる。
+    private var correctionGeneration = 0
+
+    /// 補正は地図がカメラを描き終えてから測る（移動の直後は投影がまだ古い）。
+    private func scheduleCorrection(_ requested: MapCameraPosition) {
+        correctionGeneration += 1
+        let generation = correctionGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.correctPaddedTarget(requested, generation: generation)
+        }
+    }
+
+    /// 計算で置いた中心は、tilt の上限などでわずかにずれる。地図の投影で実際の位置を測り、
+    /// パディングの残りの中央に来るまで中心だけを動かし直す。
+    private func correctPaddedTarget(_ requested: MapCameraPosition, generation: Int, remaining: Int = 4) {
+        guard remaining > 0, generation == correctionGeneration, let mapView,
+              let desired = CameraPaddingEmulation.paddedCenterPoint(
+                  paddings: requested.paddings,
+                  viewportSize: mapView.bounds.size
+              ) else { return }
+        let map: MapboxMap = mapView.mapboxMap
+        let actual = map.point(for: CLLocationCoordinate2D(
+            latitude: requested.position.latitude,
+            longitude: requested.position.longitude
+        ))
+        let deltaX = actual.x - desired.x
+        let deltaY = actual.y - desired.y
+        guard abs(deltaX) >= 0.5 || abs(deltaY) >= 0.5 else { return }
+        // 目標が画面の外（パディングが地図より大きい）なら、地図の投影が当てにならないので詰めない
+        // （Mapbox は画面外の点を (-1, -1) で返す）。
+        guard mapView.bounds.contains(actual) else { return }
+        let currentCenter = map.point(for: map.cameraState.center)
+        let center = map.coordinate(for: CGPoint(x: currentCenter.x + deltaX, y: currentCenter.y + deltaY))
+        map.setCamera(to: CameraOptions(center: center))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.correctPaddedTarget(requested, generation: generation, remaining: remaining - 1)
+        }
     }
 
     func setCameraRestriction(_ restriction: CameraRestriction?) {
@@ -134,6 +196,7 @@ private final class CameraAnimator {
     private let from: MapCameraPosition
     private let to: MapCameraPosition
     private let duration: TimeInterval
+    private let completion: (() -> Void)?
     /// 中心とズームの補間。van Wijk（＝ android-for-mapbox が呼ぶ
     /// `map.flyTo(cameraOptions:animationOptions:)` と同じ式）。
     /// ``FlyToZoomArc`` の説明を読むこと。
@@ -145,8 +208,10 @@ private final class CameraAnimator {
         mapView: MapView,
         from: MapCameraPosition,
         to: MapCameraPosition,
-        duration: TimeInterval
+        duration: TimeInterval,
+        completion: (() -> Void)? = nil
     ) {
+        self.completion = completion
         self.mapView = mapView
         self.from = from
         self.to = to
@@ -185,23 +250,17 @@ private final class CameraAnimator {
         let bearing = lerpAngle(from.bearing, to.bearing, t)
         let tilt = lerp(from.tilt, to.tilt, t)
 
-        // パディングも時間で補間する（中心は常にパディングを除いた領域の中央）。
-        let fromPaddings = from.paddings ?? MapPaddings.Zeros
-        let toPaddings = to.paddings ?? fromPaddings
         let pos = MapCameraPosition(
             position: GeoPoint(latitude: latitude, longitude: longitude, altitude: 0),
             zoom: zoom,
             bearing: bearing,
-            tilt: tilt,
-            paddings: MapPaddings(
-                top: lerp(fromPaddings.top, toPaddings.top, t),
-                left: lerp(fromPaddings.left, toPaddings.left, t),
-                bottom: lerp(fromPaddings.bottom, toPaddings.bottom, t),
-                right: lerp(fromPaddings.right, toPaddings.right, t)
-            )
+            tilt: tilt
         )
         mapView.mapboxMap.setCamera(to: pos.toMapboxCameraOptions())
-        if t >= 1.0 { stop() }
+        if t >= 1.0 {
+            stop()
+            completion?()
+        }
     }
 
     private func lerp(_ a: Double, _ b: Double, _ t: Double) -> Double { a + (b - a) * t }

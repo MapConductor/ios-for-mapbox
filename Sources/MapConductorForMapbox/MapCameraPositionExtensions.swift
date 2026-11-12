@@ -15,10 +15,10 @@ let mapboxVerticalFieldOfView: Double = 36.87
 public extension MapCameraPosition {
     /// Convert to Mapbox CameraOptions with adjusted zoom.
     func toMapboxCameraOptions() -> CameraOptions {
-        // パディングはネイティブの CameraOptions.padding へ。中心はパディングを除いた領域の中央に来る。
-        let padding = paddings.map {
-            UIEdgeInsets(top: $0.top, left: $0.left, bottom: $0.bottom, right: $0.right)
-        }
+        // パディングは CameraOptions.padding には当てない（常に 0 で、以前のパディングも消す）。
+        // tilt があると上のパディングが視野を地平線の向こうまで広げて固まるので、
+        // コントローラが中心をずらして再現する（``CameraPaddingEmulation``）。
+        let padding = UIEdgeInsets.zero
         if tilt >= 0 {
             return CameraOptions(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
@@ -60,7 +60,6 @@ public extension CameraState {
         visibleRegion: VisibleRegion? = nil
     ) -> MapCameraPosition {
         let pitchAbsDeg = min(abs(pitch), 90.0)
-        let readPaddings = MapPaddings(top: padding.top, left: padding.left, bottom: padding.bottom, right: padding.right)
         let shiftedCenter = GeoPoint(latitude: center.latitude, longitude: center.longitude)
 
         guard let logicalTiltHint, logicalTiltHint < 0.0, pitchAbsDeg > 0.0 else {
@@ -69,7 +68,6 @@ public extension CameraState {
                 zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(zoom),
                 bearing: CameraBearing.bearingFromNativeHeading(bearing),
                 tilt: pitch,
-                paddings: readPaddings,
                 visibleRegion: visibleRegion,
                 fov: mapboxVerticalFieldOfView
             )
@@ -98,7 +96,6 @@ public extension CameraState {
             zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(originalMapboxZoom),
             bearing: CameraBearing.bearingFromNativeHeading(bearing),
             tilt: -pitchAbsDeg,
-            paddings: readPaddings,
             visibleRegion: visibleRegion,
             fov: mapboxVerticalFieldOfView
         )
