@@ -300,9 +300,12 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         var isCameraMoving = false
         cameraChangedObserver = mapView.mapboxMap.onCameraChanged.observe { [weak self] event in
             guard let self else { return }
-            let camera = event.cameraState.toMapCameraPosition(
-                logicalTiltHint: self.controller?.lastLogicalTilt,
-                visibleRegion: self.visibleRegion(mapView: mapView)
+            let camera = self.targetCamera(
+                event.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt,
+                    visibleRegion: self.visibleRegion(mapView: mapView)
+                ),
+                mapView: mapView
             )
             self.state.updateCameraPosition(camera)
             if !isCameraMoving {
@@ -326,15 +329,35 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         // 停止とみなす。
         cameraIdleObserver = mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
             guard let self, isCameraMoving else { return }
-            let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
-                logicalTiltHint: self.controller?.lastLogicalTilt,
-                visibleRegion: self.visibleRegion(mapView: mapView)
+            let camera = self.targetCamera(
+                mapView.mapboxMap.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt,
+                    visibleRegion: self.visibleRegion(mapView: mapView)
+                ),
+                mapView: mapView
             )
             isCameraMoving = false
             self.controller?.notifyCameraMoveEnd(camera)
             self.onCameraMoveEnd?(camera)
             self.updateInfoBubbleLayouts()
         }
+    }
+
+    /// 地図の生のカメラ（中心は画面中心）を、パディングを除いた領域の中央にあるターゲットへ戻す。
+    /// 中心はパディングの分ずらして置いてある（``CameraPaddingEmulation``）。
+    private func targetCamera(_ raw: MapCameraPosition, mapView: MapView) -> MapCameraPosition {
+        let map: MapboxMap = mapView.mapboxMap
+        return CameraPaddingEmulation.restored(
+            raw,
+            paddings: controller?.lastPaddings,
+            fov: mapboxVerticalFieldOfView,
+            viewportSize: mapView.bounds.size,
+            unproject: { point in
+                guard mapView.bounds.contains(point) else { return nil }
+                let coordinate = map.coordinate(for: point)
+                return GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+            }
+        )
     }
 
     /// android-sdk の `clearOverlays()` と同じく、各オーバーレイのコントローラを空にする。
