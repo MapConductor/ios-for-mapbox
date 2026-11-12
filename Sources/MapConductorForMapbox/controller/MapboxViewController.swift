@@ -185,11 +185,20 @@ private final class CameraAnimator {
         let bearing = lerpAngle(from.bearing, to.bearing, t)
         let tilt = lerp(from.tilt, to.tilt, t)
 
+        // パディングも時間で補間する（中心は常にパディングを除いた領域の中央）。
+        let fromPaddings = from.paddings ?? MapPaddings.Zeros
+        let toPaddings = to.paddings ?? fromPaddings
         let pos = MapCameraPosition(
             position: GeoPoint(latitude: latitude, longitude: longitude, altitude: 0),
             zoom: zoom,
             bearing: bearing,
-            tilt: tilt
+            tilt: tilt,
+            paddings: MapPaddings(
+                top: lerp(fromPaddings.top, toPaddings.top, t),
+                left: lerp(fromPaddings.left, toPaddings.left, t),
+                bottom: lerp(fromPaddings.bottom, toPaddings.bottom, t),
+                right: lerp(fromPaddings.right, toPaddings.right, t)
+            )
         )
         mapView.mapboxMap.setCamera(to: pos.toMapboxCameraOptions())
         if t >= 1.0 { stop() }
