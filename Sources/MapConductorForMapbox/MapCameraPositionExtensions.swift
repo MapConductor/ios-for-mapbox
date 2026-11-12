@@ -1,5 +1,6 @@
 import CoreLocation
 import Foundation
+import UIKit
 import MapboxMaps
 @_spi(MapConductorDriver) import MapConductorCore
 
