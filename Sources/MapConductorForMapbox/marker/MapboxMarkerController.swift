@@ -3,7 +3,7 @@ import CoreGraphics
 import CoreLocation
 import Foundation
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 @MainActor
@@ -31,6 +31,14 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     private var tileRouteId: String?
     private var tileVersion: Int64 = 0
     private var tiledMarkerIds: Set<String> = []
+    /// Markers tiled while the style was loading. Their tile layer goes on the
+    /// map in `onStyleLoaded`, and their `onAdded` waits for it.
+    private var tiledAwaitingStyle: [MarkerState] = []
+    /// Whether the style the map shows is loaded. `MapboxMap.isStyleLoaded`
+    /// cannot answer this: it also waits for every source, so it turns false
+    /// whenever a layer is added. Cleared by ``onStyleLoading()`` when the
+    /// host starts loading a new map design, set by `onStyleLoaded`.
+    private var styleLoaded = false
     private var tileSourceId: String?
     private var tileLayerId: String?
     private var lastServerBaseUrl: String = ""
@@ -65,7 +73,12 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             tileSize: Self.retinaAwareTileSize,
             cacheSizeBytes: tilingOptions.cacheSize,
             debugTileOverlay: tilingOptions.debugTileOverlay,
-            iconScaleCallback: scaledCallback
+            iconScaleCallback: scaledCallback,
+            // Tile pixels, not points: the cell is compared against the
+            // destination rectangles the renderer has already rounded into the
+            // tile's own pixel grid. android-sdk passes the value through the
+            // same way, so the two show the same density at the same zoom.
+            declutterPx: tilingOptions.declutterPx
         )
         TileServerRegistry.get().register(routeId: routeId, provider: renderer)
         tileRenderer = renderer
@@ -81,16 +94,34 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
     ///
     /// 初回だけは取り込み自体がまだなので `add(data:)` を流す。`add` は fingerPrint で
     /// 変化なしを弾くため、2 回目以降に呼ばれても実質ただの走査で終わる。
+    /// The host started loading a new map design: the layers on the map go with
+    /// the old style, and the tile layer goes back on in `onStyleLoaded`.
+    func onStyleLoading() {
+        styleLoaded = false
+    }
+
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
         renderer.onStyleLoaded(mapboxMap)
         // Re-attach tile raster layer if there are already tiled markers
         if !tiledMarkerIds.isEmpty {
             updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: true)
         }
+        styleLoaded = true
+        reportTiledAwaitingStyle()
         styleGate.markReady()
     }
 
+    /// 同一一覧の再送を見抜く門番。詳細は型のコメントに。
+    private var syncIdentity = MarkerListIdentity()
+
     func syncMarkers(_ markers: [Marker]) {
+        // 同じ一覧の再送は入口で帰す。SwiftUI はカメラが動くたびに body を
+        // 再評価し、そのたびに全マーカーがここへ来る。なぜそれが実害か
+        // （144k 件で操作の 89% が凍った）は core の MarkerListIdentity に。
+        guard syncIdentity.shouldProcess(markers) else {
+            refreshTileLayerIfNeeded()
+            return
+        }
         let newIds = Set(markers.map { $0.id })
         let oldIds = Set(markerStatesById.keys)
 
@@ -174,33 +205,18 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         MCLog.marker("MapboxMarkerController.handleTiledMarkerTap point=\(screenPoint) tiledCount=\(tiledMarkerIds.count)")
         guard !tiledMarkerIds.isEmpty, let mapView else { return false }
         let mapboxMap: MapboxMap = mapView.mapboxMap
-        var bestState: MarkerState? = nil
-        var bestDist = CGFloat.infinity
-
-        for id in tiledMarkerIds {
-            guard let entity = markerManager.getEntity(id), entity.state.clickable else { continue }
-            let coord = CLLocationCoordinate2D(
-                latitude: entity.state.position.latitude,
-                longitude: entity.state.position.longitude
-            )
-            let markerPoint = mapboxMap.point(for: coord)
-            // アイコン矩形 + tapTolerance で判定する（android の `find()` と同じ）。
-            // 以前は 44pt の固定半径で、アイコンの大きさを一切見ていなかった。
-            guard MarkerHitTest.hitsIcon(
-                touchScreen: screenPoint,
-                markerScreen: markerPoint,
-                state: entity.state
-            ) else { continue }
-            // 重なったマーカー同士は、アンカーがタップに近い方を優先する。
-            let dist = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if dist < bestDist {
-                bestDist = dist
-                bestState = entity.state
-            }
-        }
+        // 選び方はコアの MarkerHitTest.pick と同じ。指の下にアイコン（ラベル込み）が描かれている
+        // マーカーを、アンカーの近い別のマーカーより優先する。
+        let candidates = tiledMarkerIds.compactMap { markerManager.getEntity($0)?.state }.filter(\.clickable)
+        let bestState = MarkerHitTest.pick(
+            touchScreen: screenPoint,
+            candidates: candidates,
+            state: { $0 },
+            project: { mapboxMap.point(for: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)) }
+        )
 
         if let state = bestState {
-            MCLog.marker("MapboxMarkerController.handleTiledMarkerTap hit id=\(state.id) dist=\(bestDist)")
+            MCLog.marker("MapboxMarkerController.handleTiledMarkerTap hit id=\(state.id)")
             dispatchClick(state: state)
             return true
         }
@@ -261,6 +277,34 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         (state.icon ?? DefaultMarkerIcon()).toBitmapIcon()
     }
 
+    /// タイル担当のマーカーが変わったら、タイルを描き直させる。
+    ///
+    /// タイル担当のマーカーはネイティブのマーカーを持たないので、基底の `update` は
+    /// 管理表を書き換えるだけで地図には何も届かない。アイコンや位置をその場で
+    /// 書き換えても、描画済みのタイルは古い絵のまま残っていた。
+    override func update(state: MarkerState) async {
+        await super.update(state: state)
+        guard tiledMarkerIds.contains(state.id) else { return }
+        scheduleTileRefresh()
+    }
+
+    private var tileRefreshScheduled = false
+
+    /// 描き直しは 1 回にまとめる。ラベルの付け替えのように数百本が続けて変わると、
+    /// 1 本ごとにソースを差し替えて、そのたびに地図が全タイルを取り直す。
+    private func scheduleTileRefresh() {
+        guard !tileRefreshScheduled else { return }
+        tileRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.tileRefreshScheduled = false
+            guard let tileRenderer = self.tileRenderer, let mapboxMap = self.mapView?.mapboxMap else { return }
+            tileRenderer.invalidate()
+            self.tileVersion += 1
+            self.updateTileLayer(mapboxMap: mapboxMap, hasTiledMarkers: !self.tiledMarkerIds.isEmpty)
+        }
+    }
+
     override func add(data: [MarkerState]) async {
         guard tilingOptions.enabled else {
             MCLog.marker("MapboxMarkerController.add tilingDisabled count=\(data.count)")
@@ -279,6 +323,7 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             defaultMarkerIcon: defaultMarkerIconForTiling,
             tilingEnabled: tilingOptions.enabled,
             tiledMarkerIds: &localTiledMarkerIds,
+            addedTracker: addedTracker,
             shouldTile: { [shouldTileAll] _ in shouldTileAll }
         )
         tiledMarkerIds = localTiledMarkerIds
@@ -292,6 +337,15 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             } else {
                 MCLog.marker("MapboxMarkerController.add skipped updateTileLayer: mapboxMap not available")
             }
+        }
+
+        // The newly tiled markers are on the map once their tile layer is. While
+        // the style loads there is no layer: `onStyleLoaded` adds it, and reports
+        // these then.
+        if styleLoaded {
+            await addedTracker.admitAndNotify(result.tiledAdded)
+        } else {
+            tiledAwaitingStyle.append(contentsOf: result.tiledAdded)
         }
     }
 
@@ -308,7 +362,12 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         guard let routeId = tileRouteId else { return }
         let server = TileServerRegistry.get()
         lastServerBaseUrl = server.baseUrl
-        let urlTemplate = server.urlTemplate(routeId: routeId, version: tileVersion)
+        // 版は URL に入れる。同じ URL のままだと地図は描画済みのタイルを取り直さない。
+        let urlTemplate = server.urlTemplate(
+            routeId: routeId,
+            tileSize: RasterLayerSource.defaultTileSize,
+            cacheKey: "v\(tileVersion)"
+        )
         let sourceId = tileSourceId ?? "mapconductor-tile-markers-source-\(routeId)"
         let layerId = tileLayerId ?? "mapconductor-tile-markers-layer-\(routeId)"
         tileSourceId = sourceId
@@ -326,7 +385,8 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         try? mapboxMap.addSource(source)
 
         let layer = RasterLayer(id: layerId, source: sourceId)
-        try? mapboxMap.addLayer(layer)
+        // マーカーのタイルはマーカーと同じ帯。
+        MapboxOverlayStacking.add(layer, OverlayStackKey(.marker), to: mapboxMap)
     }
 
     private func subscribeToMarker(_ state: MarkerState) {
@@ -344,7 +404,18 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
             }
     }
 
+    /// The markers tiled while the style loaded are on the map now that their
+    /// tile layer is. Those removed or drawn natively since are not reported
+    /// here (a native one was reported when it was drawn).
+    private func reportTiledAwaitingStyle() {
+        guard !tiledAwaitingStyle.isEmpty else { return }
+        let landed = tiledAwaitingStyle.filter { tiledMarkerIds.contains($0.id) }
+        tiledAwaitingStyle.removeAll()
+        Task { [addedTracker] in await addedTracker.admitAndNotify(landed) }
+    }
+
     func unbind() {
+        tiledAwaitingStyle.removeAll()
         mapView?.gestures.options.panEnabled = panEnabledBeforeDrag ?? true; panEnabledBeforeDrag = nil
         markerSubscriptions.values.forEach { $0.cancel() }
         markerSubscriptions.removeAll()
@@ -361,31 +432,18 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
         destroy()
     }
 
-    /// ドラッグ開始時のヒットテスト。タップと同じ「アイコン矩形 + tapTolerance」で判定する
+    /// ドラッグ開始時のヒットテスト。タップと同じ ``MarkerHitTest/pick`` の規則で選ぶ
     /// （以前は 44pt の固定半径で、アイコンの大きさを見ていなかった）。
     private func draggableMarkerState(at screenPoint: CGPoint) -> MarkerState? {
         guard let mapView else { return nil }
         let candidates = markerManager.allEntities().map(\.state).filter(\.draggable)
-        var bestState: MarkerState?
-        var bestDistance = CGFloat.infinity
-
-        for state in candidates {
-            let coordinate = CLLocationCoordinate2D(
-                latitude: state.position.latitude,
-                longitude: state.position.longitude
-            )
-            let markerPoint = mapView.mapboxMap.point(for: coordinate)
-            guard MarkerHitTest.hitsIcon(
-                touchScreen: screenPoint,
-                markerScreen: markerPoint,
-                state: state
-            ) else { continue }
-            let distance = hypot(screenPoint.x - markerPoint.x, screenPoint.y - markerPoint.y)
-            if distance < bestDistance {
-                bestDistance = distance
-                bestState = state
-            }
-        }
+        let mapboxMap: MapboxMap = mapView.mapboxMap
+        let bestState = MarkerHitTest.pick(
+            touchScreen: screenPoint,
+            candidates: candidates,
+            state: { $0 },
+            project: { mapboxMap.point(for: CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)) }
+        )
 
         return bestState
     }

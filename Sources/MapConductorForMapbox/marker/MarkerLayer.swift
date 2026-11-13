@@ -1,5 +1,6 @@
 import Foundation
 import MapboxMaps
+@_spi(MapConductorDriver) import MapConductorCore
 
 final class MarkerLayer {
     enum Prop {
@@ -8,6 +9,8 @@ final class MarkerLayer {
         static let iconOffsetX = "icon_offset_x"
         static let iconOffsetY = "icon_offset_y"
         static let isHidden = "is_hidden"
+        /// 重なり順（``MarkerDrawOrder``）。レイヤーの `symbolSortKey` が読む。大きいほど手前。
+        static let sortKey = "sort_key"
         static let defaultMarkerId = "mapconductor_default_marker"
     }
 
@@ -51,6 +54,8 @@ final class MarkerLayer {
         layer.iconAnchor = .constant(.bottom)
         layer.iconAllowOverlap = .constant(true)
         layer.textAllowOverlap = .constant(true)
+        // 重なり順は sort_key（zIndex → 南 → 西）。足した順には頼らない。
+        layer.symbolSortKey = .expression(Exp(.get) { Prop.sortKey })
         layer.iconOffset = .expression(
             Exp(.array) {
                 "number"
@@ -68,7 +73,7 @@ final class MarkerLayer {
                 Double(1)
             }
         )
-        try? mapboxMap.addLayer(layer)
+        MapboxOverlayStacking.add(layer, OverlayStackKey(.marker), to: mapboxMap)
     }
 
     func setFeatures(_ features: [Feature], mapboxMap: MapboxMap) {

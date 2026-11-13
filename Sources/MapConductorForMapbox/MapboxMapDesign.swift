@@ -23,6 +23,9 @@ public struct MapboxMapDesign: MapboxMapDesignTypeProtocol, Hashable {
     public func getValue() -> String { styleURI }
 
     // Mapbox built-in styles
+    /// No basemap: a background colour and nothing else.
+    public static let None = MapboxMapDesign(id: "none", styleURI: BlankMapStyle.fileURL.absoluteString)
+
     public static let Standard = MapboxMapDesign(
         id: "standard",
         styleURI: "\(mapboxBaseURL)/standard"

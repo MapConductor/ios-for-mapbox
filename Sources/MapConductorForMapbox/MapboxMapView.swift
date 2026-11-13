@@ -10,6 +10,8 @@ public struct MapboxMapView: View {
     private let projection: MapProjection
     private let handlers: MapViewHandlers<MapboxViewState>
     private let cameraRestriction: CameraRestriction?
+    private let style: MapViewStyle?
+    private let onStyleDiagnostics: (([String]) -> Void)?
     private let content: () -> MapViewContent
 
     public init(
@@ -23,6 +25,12 @@ public struct MapboxMapView: View {
         onCameraMove: OnCameraMoveHandler? = nil,
         onCameraMoveEnd: OnCameraMoveHandler? = nil,
         sdkInitialize: (() -> Void)? = nil,
+        /// How the map looks, when the app states it rather than naming a
+        /// design. `MapConductorVectorStyle` builds one; what happens
+        /// underneath depends on this backend and the app does not have to
+        /// know.
+        style: MapViewStyle? = nil,
+        onStyleDiagnostics: (([String]) -> Void)? = nil,
         @MapViewContentBuilder content: @escaping () -> MapViewContent = { MapViewContent() }
     ) {
         self.state = state
@@ -37,6 +45,8 @@ public struct MapboxMapView: View {
             sdkInitialize: sdkInitialize
         )
         self.cameraRestriction = cameraRestriction
+        self.style = style
+        self.onStyleDiagnostics = onStyleDiagnostics
         self.content = content
     }
 
@@ -58,6 +68,8 @@ public struct MapboxMapView: View {
                 cameraRestriction: cameraRestriction,
                 projection: projection,
                 handlers: handlers,
+                style: style,
+                onStyleDiagnostics: onStyleDiagnostics,
                 content: mapContent
             )
         }
@@ -71,6 +83,8 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
     let cameraRestriction: CameraRestriction?
     let projection: MapProjection
     let handlers: MapViewHandlers<MapboxViewState>
+    let style: MapViewStyle?
+    let onStyleDiagnostics: (([String]) -> Void)?
     let content: MapViewContent
 
     // 地図の組み立てと結線は `MapboxMapHost` が持つ。ここは SwiftUI のライフサイクルを
@@ -85,12 +99,16 @@ private struct MapboxMapViewRepresentable: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: MapView, context: Context) {
+        // Every evaluation of the app's `body` lands here; most calls do
+        // nothing. See `MapViewStyleHost.apply`.
+        context.coordinator.applyStyle(style, onDiagnostics: onStyleDiagnostics)
         context.coordinator.syncNativeViewSettings(cameraRestriction: cameraRestriction)
         context.coordinator.updateContent(content)
         context.coordinator.updateInfoBubbleLayouts()
     }
 
     static func dismantleUIView(_ uiView: MapView, coordinator: MapboxMapHost) {
+        coordinator.disposeStyle()
         coordinator.unbind()
     }
 }

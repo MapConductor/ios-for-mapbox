@@ -1,20 +1,30 @@
 import CoreLocation
 import Foundation
+import UIKit
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 
 // Mapbox zoom is offset by +1.0 from "Google-style" zoom (same as MapLibre).
 internal let mapboxCameraZoomAdjustValue = 1.0
 private let converter = MapboxZoomAltitudeConverter()
 
+/// Mapbox のカメラの縦の視野角（度）。Mapbox Maps の既定値（`2·atan(1/3)`）で、
+/// iPad Pro 11 の実測（tilt 30°〜60°）でも一致した。
+let mapboxVerticalFieldOfView: Double = 36.87
+
 public extension MapCameraPosition {
     /// Convert to Mapbox CameraOptions with adjusted zoom.
     func toMapboxCameraOptions() -> CameraOptions {
+        // パディングは CameraOptions.padding には当てない（常に 0 で、以前のパディングも消す）。
+        // tilt があると上のパディングが視野を地平線の向こうまで広げて固まるので、
+        // コントローラが中心をずらして再現する（``CameraPaddingEmulation``）。
+        let padding = UIEdgeInsets.zero
         if tilt >= 0 {
             return CameraOptions(
                 center: CLLocationCoordinate2D(latitude: position.latitude, longitude: position.longitude),
+                padding: padding,
                 zoom: MapboxZoomAltitudeConverter.googleZoomToMapboxZoom(zoom),
-                bearing: bearing,
+                bearing: CameraBearing.toNativeHeading(bearing),
                 pitch: tilt
             )
         }
@@ -26,13 +36,14 @@ public extension MapCameraPosition {
         let maplibreZoomForAltitude = MapboxZoomAltitudeConverter.googleZoomToMapboxZoom(zoom)
         let altitude = converter.zoomLevelToAltitude(zoomLevel: maplibreZoomForAltitude, latitude: position.latitude, tilt: 0.0)
         let distanceForward = altitude * tan(tiltAbsRad)
-        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: bearing)
+        let target = Spherical.computeOffset(origin: position, distance: distanceForward, heading: CameraBearing.toNativeHeading(bearing))
         let mapboxZoom = converter.altitudeToZoomLevel(altitude: altitude/cos(tiltAbsRad), latitude: target.latitude, tilt: 0.0)
         
         return CameraOptions(
             center: CLLocationCoordinate2D(latitude: target.latitude, longitude: target.longitude),
+            padding: padding,
             zoom: mapboxZoom,
-            bearing: bearing,
+            bearing: CameraBearing.toNativeHeading(bearing),
             pitch: tilt
         )
     }
@@ -55,9 +66,10 @@ public extension CameraState {
             return MapCameraPosition(
                 position: shiftedCenter,
                 zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(zoom),
-                bearing: bearing,
+                bearing: CameraBearing.bearingFromNativeHeading(bearing),
                 tilt: pitch,
-                visibleRegion: visibleRegion
+                visibleRegion: visibleRegion,
+                fov: mapboxVerticalFieldOfView
             )
         }
 
@@ -82,9 +94,10 @@ public extension CameraState {
         return MapCameraPosition(
             position: originalCenter,
             zoom: MapboxZoomAltitudeConverter.mapboxZoomToGoogleZoom(originalMapboxZoom),
-            bearing: bearing,
+            bearing: CameraBearing.bearingFromNativeHeading(bearing),
             tilt: -pitchAbsDeg,
-            visibleRegion: visibleRegion
+            visibleRegion: visibleRegion,
+            fov: mapboxVerticalFieldOfView
         )
     }
 }

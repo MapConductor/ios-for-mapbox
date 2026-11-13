@@ -1,6 +1,6 @@
 import Combine
 import CoreLocation
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import MapboxMaps
 import SwiftUI
 import UIKit
@@ -72,6 +72,8 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         guard let mapView else { return }
         let newStyleURI = StyleURI(rawValue: state.mapDesignType.styleURI)
         if let newStyleURI, mapView.mapboxMap.style.uri != newStyleURI {
+            markerController?.onStyleLoading()
+            rasterController?.onStyleLoading()
             mapView.mapboxMap.loadStyle(newStyleURI)
         }
         // ジェスチャはここで直接適用する。SwiftUI の同期フックは常にネイティブビューを
@@ -136,6 +138,9 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
 
     // MapboxMaps Cancelable observers
     private var styleLoadedObserver: (any Cancelable)?
+
+    /// Keeps the mutation store listening for as long as this host lives.
+    private var styleLoadedSubscription: MapStyleInstallation?
     private var cameraChangedObserver: (any Cancelable)?
     private var cameraIdleObserver: (any Cancelable)?
 
@@ -154,6 +159,31 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         // Publish marker rendering as a map-scoped capability. Add-on modules resolve it
         // from the registry; this provider never learns that clustering exists.
         state.serviceRegistry.put(MarkerRenderingSupportKey.self, strategyManager)
+        // Mapbox draws vector styles natively: a layer with a style to show
+        // hands it over instead of rasterising it.
+        state.serviceRegistry.put(
+            VectorStyleSupportKey.self,
+            VectorStyleAsDesign(state: state, designId: { $0.id }) { url, rules in
+                MapboxMapDesign(id: "vector-style:\(url)", styleURI: url, attributionRules: rules)
+            }
+        )
+        // Mapbox can also be told to change a loaded style in place, so
+        // adjusting one need not hand it a new document -- which would drop
+        // its tiles and rebuild every overlay the app added. `VectorStyle`
+        // looks this up and takes the cheap road when it is here.
+        let mutations = StyleMutationStore { [weak mapView] list in
+            applyStyleMutations(
+                MapboxStyleMutationTarget { mapView?.mapboxMap },
+                list
+            )
+        }
+        state.serviceRegistry.put(VectorStyleMutationSupportKey.self, mutations)
+        // Through the coordinator's own registry rather than a field here:
+        // the style installed on this map listens to the same signal, and
+        // both have to hear it.
+        styleLoadedSubscription = styleHost.onStyleLoaded { [weak mutations] in
+            mutations?.onStyleLoaded()
+        }
 
         let controller = MapboxViewController(mapView: mapView)
         self.controller = controller
@@ -178,6 +208,37 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         self.groundImageController = groundImageController
         let rasterController = MapboxRasterLayerController(mapView: mapView)
         self.rasterController = rasterController
+        // Many polygons are drawn into raster tiles and shown as one raster
+        // layer; taps still resolve against the original shapes.
+        let polygonTiler = PolygonTiler()
+        polygonTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: PolygonTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(PolygonTiler.layerId)
+            }
+        }
+        polygonController.tiler = polygonTiler
+        // Many polylines likewise, in their own raster layer in the polyline band
+        // (under the natively drawn polylines); taps still resolve against the original lines.
+        let polylineTiler = PolylineTiler()
+        polylineTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: PolylineTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(PolylineTiler.layerId)
+            }
+        }
+        polylineController.tiler = polylineTiler
+        let circleTiler = CircleTiler()
+        circleTiler.onTemplate = { [weak rasterController] template, tileSize in
+            if let template {
+                await rasterController?.upsert(state: CircleTiler.rasterLayerState(template: template, tileSize: tileSize))
+            } else {
+                await rasterController?.removeById(CircleTiler.layerId)
+            }
+        }
+        circleController.tiler = circleTiler
 
         // Route the simple overlays through the shared collector so each
         // controller subscribes to one source of truth instead of the map
@@ -190,6 +251,7 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         controller.registerOverlayController(polygonController)
         controller.registerOverlayController(groundImageController)
         controller.registerOverlayController(rasterController)
+        controller.clearOverlaysHandler = { [weak self] in await self?.clearOverlays() }
 
         let overlayScope = MapOverlayScope()
         self.overlayScope = overlayScope
@@ -238,9 +300,12 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         var isCameraMoving = false
         cameraChangedObserver = mapView.mapboxMap.onCameraChanged.observe { [weak self] event in
             guard let self else { return }
-            let camera = event.cameraState.toMapCameraPosition(
-                logicalTiltHint: self.controller?.lastLogicalTilt,
-                visibleRegion: self.visibleRegion(mapView: mapView)
+            let camera = self.targetCamera(
+                event.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt,
+                    visibleRegion: self.visibleRegion(mapView: mapView)
+                ),
+                mapView: mapView
             )
             self.state.updateCameraPosition(camera)
             if !isCameraMoving {
@@ -257,17 +322,55 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
             self.updateInfoBubbleLayouts()
         }
 
+        // `onMapIdle` は「描画が一段落した」の通知で、カメラが止まったという意味ではない。
+        // 地図は何もしていなくても約 0.3 秒ごとに描き直して idle を出すので（iPad 実測で
+        // 25 秒に 53〜77 回）、そのまま流すと止まっている間も停止の通知が出続け、
+        // 停止のたびに重い処理を走らせるアプリが空回りする。動いた後の最初の idle だけを
+        // 停止とみなす。
         cameraIdleObserver = mapView.mapboxMap.onMapIdle.observe { [weak self] _ in
-            guard let self else { return }
-            let camera = mapView.mapboxMap.cameraState.toMapCameraPosition(
-                logicalTiltHint: self.controller?.lastLogicalTilt,
-                visibleRegion: self.visibleRegion(mapView: mapView)
+            guard let self, isCameraMoving else { return }
+            let camera = self.targetCamera(
+                mapView.mapboxMap.cameraState.toMapCameraPosition(
+                    logicalTiltHint: self.controller?.lastLogicalTilt,
+                    visibleRegion: self.visibleRegion(mapView: mapView)
+                ),
+                mapView: mapView
             )
             isCameraMoving = false
             self.controller?.notifyCameraMoveEnd(camera)
             self.onCameraMoveEnd?(camera)
             self.updateInfoBubbleLayouts()
         }
+    }
+
+    /// 地図の生のカメラ（中心は画面中心）を、パディングを除いた領域の中央にあるターゲットへ戻す。
+    /// 中心はパディングの分ずらして置いてある（``CameraPaddingEmulation``）。
+    private func targetCamera(_ raw: MapCameraPosition, mapView: MapView) -> MapCameraPosition {
+        let map: MapboxMap = mapView.mapboxMap
+        return CameraPaddingEmulation.restored(
+            raw,
+            paddings: controller?.lastPaddings,
+            fov: mapboxVerticalFieldOfView,
+            viewportSize: mapView.bounds.size,
+            unproject: { point in
+                guard mapView.bounds.contains(point) else { return nil }
+                let coordinate = map.coordinate(for: point)
+                return GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude, altitude: 0)
+            }
+        )
+    }
+
+    /// android-sdk の `clearOverlays()` と同じく、各オーバーレイのコントローラを空にする。
+    /// `controller.clearOverlaysHandler` から呼ばれる。
+    func clearOverlays() async {
+        await markerController?.clear()
+        await polylineController?.clear()
+        await polygonController?.clear()
+        await groundImageController?.clear()
+        await circleController?.clear()
+        await rasterController?.clear()
+        // strategy（クラスタリングなど）が描いたマーカーも消す。
+        await state.serviceRegistry.clearMarkerRendering()
     }
 
     public func unbind() {
@@ -316,6 +419,7 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
                 visibleRegion: visibleRegion(mapView: mapView)
             )
             polylineController?.setCurrentCameraPosition(camera)
+            circleController?.setCurrentCameraPosition(camera)
         }
         infoBubbleController?.syncInfoBubbles(content.infoBubbles)
         markerController?.tilingOptions = content.markerTilingOptions
@@ -325,6 +429,11 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         overlayScope?.circleCollector.sync(content.circles.map { $0.state })
         overlayScope?.polylineCollector.sync(content.polylines.map { $0.state })
         overlayScope?.polygonCollector.sync(content.polygons.map { $0.state })
+        polygonController?.tiler?.refreshIfServerMoved()
+        if polylineController?.tiler?.setOptions(content.polylineTilingOptions) == true { overlayScope?.polylineCollector.flush() }
+        if circleController?.tiler?.setOptions(content.circleTilingOptions) == true { overlayScope?.circleCollector.flush() }
+        polylineController?.tiler?.refreshIfServerMoved()
+        circleController?.tiler?.refreshIfServerMoved()
         for handler in content.polygonSyncHandlers {
             let hullController = hullPolygonController
             handler.bindPolygonSync { [weak hullController] states in
@@ -356,6 +465,10 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
         markerController?.onStyleLoaded(mapboxMap)
         strategyManager.renderer?.onStyleLoaded(mapboxMap)
         strategyManager.flush()
+        // Whatever a vector style adjustment applied is gone with the old
+        // style; this is where it goes back on. Everything that cares --
+        // the mutation store, the installed style -- hears it from here.
+        notifyStyleLoaded()
         performMapLoadedOnce {
             controller?.notifyMapInitialized()
             onMapLoaded?(state)
@@ -388,6 +501,7 @@ public final class MapboxMapHost: MapViewCoordinatorBase<MapboxViewState> {
             visibleRegion: visibleRegion(mapView: mapView)
         )
         polylineController?.setCurrentCameraPosition(camera)
+        circleController?.setCurrentCameraPosition(camera)
         Task { [weak self] in
             guard let self else { return }
             if await self.markerController?.handleTap(at: point) == true {

@@ -7,7 +7,7 @@ let frameworkLibraryType: Product.Library.LibraryType? =
 let usingLocalCore = FileManager.default.fileExists(atPath: "../ios-sdk-core/Package.swift")
 let coreDependency: Package.Dependency = usingLocalCore
     ? .package(path: "../ios-sdk-core")
-    : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.1.4")
+    : .package(url: "https://github.com/MapConductor/ios-sdk-core", from: "1.4.0")
 
 let package = Package(
     name: "ios-for-mapbox",
@@ -23,7 +23,7 @@ let package = Package(
     ],
     dependencies: [
         coreDependency,
-        .package(url: "https://github.com/mapbox/mapbox-maps-ios-binary", from: "11.0.0"),
+        .package(url: "https://github.com/mapbox/mapbox-maps-ios-binary", from: "11.33.0"),
     ],
     targets: [
         .target(
@@ -32,6 +32,12 @@ let package = Package(
                 .product(name: "MapConductorCore", package: "ios-sdk-core"),
                 .product(name: "MapboxMaps", package: "mapbox-maps-ios-binary"),
             ]
+        ),
+        // Checked against a real MapView loading local styles, which needs no
+        // network and no real access token.
+        .testTarget(
+            name: "MapConductorForMapboxTests",
+            dependencies: ["MapConductorForMapbox"]
         ),
     ]
 )

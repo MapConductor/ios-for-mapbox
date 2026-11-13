@@ -12,13 +12,34 @@ final class MapboxRasterLayerController: RasterLayerController<MapboxRasterLayer
         Task { [weak self] in await self?.applyToRenderer(states) }
     }
 
+    /// Layers the SDK adds itself (polygon tiles) through `upsert`, kept so they
+    /// can be added again: a new style drops every runtime layer, and these are
+    /// not in the app's list the gate replays.
+    private var upserted: [String: RasterLayerState] = [:]
+
+    /// `upsert` callers whose layer could not go on the map yet, by layer id.
+    /// They return once `onStyleLoaded` has added it.
+    private var awaitingStyle: [String: [CheckedContinuation<Void, Never>]] = [:]
+
+    /// Whether the style the map shows is loaded. `MapboxMap.isStyleLoaded`
+    /// cannot answer this: it also waits for every source, so it turns false
+    /// whenever a layer is added. Cleared by ``onStyleLoading()`` when the
+    /// host starts loading a new map design, set by `onStyleLoaded`.
+    private var styleLoaded = false
+
     init(mapView: MapView?) {
         let rasterManager = RasterLayerManager<MapboxRasterLayer>()
         let renderer = MapboxRasterLayerOverlayRenderer(mapView: mapView)
         super.init(rasterLayerManager: rasterManager, renderer: renderer)
     }
 
+    /// The host started loading a new map design.
+    func onStyleLoading() {
+        styleLoaded = false
+    }
+
     func onStyleLoaded(_ mapboxMap: MapboxMap) {
+        styleLoaded = true
         renderer.onStyleLoaded(mapboxMap)
 
         // 新しいスタイルは前のスタイルに足したソース／レイヤを持たない。
@@ -27,6 +48,45 @@ final class MapboxRasterLayerController: RasterLayerController<MapboxRasterLayer
         rasterLayerManager.clear()
 
         styleGate.markReady()
+        let replay = Array(upserted.values)
+        let waiting = awaitingStyle
+        awaitingStyle.removeAll()
+        if !replay.isEmpty || !waiting.isEmpty {
+            Task { [weak self] in
+                for state in replay { await self?.applyUpsert(state) }
+                for continuation in waiting.values.joined() { continuation.resume() }
+            }
+        }
+    }
+
+    /// Before the style is ready there is nowhere to add the layer; it is added
+    /// when the style loads.
+    ///
+    /// Returns once the layer is on the map, which can be after that load: the
+    /// caller takes the return as "on the map" (PolygonTiler reports the tiled
+    /// polygons' `onAdded` then). The style is also missing while a new map
+    /// design loads, when the layer added here is dropped with the old style.
+    override func upsert(state: RasterLayerState) async {
+        upserted[state.id] = state
+        if styleGate.isReady {
+            await super.upsert(state: state)
+            if styleLoaded { return }
+        }
+        await withCheckedContinuation { continuation in
+            awaitingStyle[state.id, default: []].append(continuation)
+        }
+    }
+
+    override func removeById(_ id: String) async {
+        upserted.removeValue(forKey: id)
+        awaitingStyle.removeValue(forKey: id)?.forEach { $0.resume() }
+        await super.removeById(id)
+    }
+
+    private func applyUpsert(_ state: RasterLayerState) async {
+        // Replaced or removed while waiting.
+        guard upserted[state.id] === state else { return }
+        await super.upsert(state: state)
     }
 
     override func add(data: [RasterLayerState]) async {
@@ -49,6 +109,10 @@ final class MapboxRasterLayerController: RasterLayerController<MapboxRasterLayer
     }
 
     func unbind() {
+        upserted.removeAll()
+        let waiting = awaitingStyle
+        awaitingStyle.removeAll()
+        for continuation in waiting.values.joined() { continuation.resume() }
         styleGate.reset()
         renderer.unbind()
         destroy()

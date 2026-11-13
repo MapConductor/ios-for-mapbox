@@ -1,6 +1,6 @@
 import Foundation
 import MapboxMaps
-import MapConductorCore
+@_spi(MapConductorDriver) import MapConductorCore
 import UIKit
 
 @MainActor
@@ -115,7 +115,7 @@ final class MapboxGroundImageOverlayRenderer: AbstractGroundImageOverlayRenderer
 
         var layer = RasterLayer(id: layerId, source: sourceId)
         layer.rasterOpacity = .constant(opacity.clampedOpacity)
-        try? mapboxMap.addLayer(layer)
+        MapboxOverlayStacking.add(layer, OverlayStackKey(.groundImage), to: mapboxMap)
     }
 
     private func removeSourceAndLayerIfExists(mapboxMap: MapboxMap, sourceId: String, layerId: String) {
