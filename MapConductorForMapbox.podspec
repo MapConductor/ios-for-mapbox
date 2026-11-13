@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = "MapConductorForMapbox"
-  s.version = "1.3.1"
+  s.version = "1.4.0"
   s.summary = "MapConductor's Mapbox provider."
   s.license = { :type => "Apache-2.0" }
   s.author = "MapConductor"
@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.platform = :ios, "17.0"
   s.swift_version = "5.9"
   s.source_files = "Sources/MapConductorForMapbox/**/*.swift"
-  s.dependency "MapConductorCore"
+  s.dependency "MapConductorCore", "~> 1.4"
   # ベンダ SDK は **source pod ではなく本家の pod** から引く。
   # `MapboxMaps` は CocoaPods trunk にあり、その依存（`MapboxCoreMaps` /
   # `MapboxCommon`）は Mapbox の CDN から降りてくる。Maps SDK v11 は
