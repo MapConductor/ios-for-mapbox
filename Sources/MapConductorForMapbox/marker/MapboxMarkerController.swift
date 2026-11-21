@@ -391,17 +391,14 @@ final class MapboxMarkerController: AbstractMarkerController<Feature, MapboxMark
 
     private func subscribeToMarker(_ state: MarkerState) {
         guard markerSubscriptions[state.id] == nil else { return }
-        markerSubscriptions[state.id] = state.asFlow()
-            .dropFirst()
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in
-                guard let self, self.markerStatesById[state.id] != nil else { return }
-                Task { [weak self] in
-                    guard let self else { return }
-                    await self.update(state: state)
-                    self.onUpdateInfoBubble(state.id)
-                }
+        markerSubscriptions[state.id] = state.onChange { [weak self] in
+            guard let self, self.markerStatesById[state.id] != nil else { return }
+            Task { [weak self] in
+                guard let self else { return }
+                await self.update(state: state)
+                self.onUpdateInfoBubble(state.id)
             }
+        }
     }
 
     /// The markers tiled while the style loaded are on the map now that their
